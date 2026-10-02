@@ -1,6 +1,6 @@
 import { type PluginSurfaceProps, usePaseo } from "@getpaseo/plugin/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
+import { Platform, Pressable, Text, View, useWindowDimensions } from "react-native";
 import type { TeamState } from "../shared/factory-contracts.js";
 import {
   officeAgentIds,
@@ -9,7 +9,7 @@ import {
   type OfficeDesk,
 } from "./office-model.js";
 import { mountOffice, type OfficePalette, type OfficeRenderer } from "./web.js";
-import { Action, useFactoryStyles } from "./ui.js";
+import { Action, SurfaceSheet, useFactoryStyles } from "./ui.js";
 import { kitchenStations, clampZoom } from "./kitchen-stations.js";
 import { KitchenInspector } from "./kitchen-inspector.js";
 import { NativeKitchenMap } from "./kitchen-native-map.js";
@@ -130,53 +130,64 @@ export function Office(props: OfficeProps) {
   return (
     <View style={styles.stack}>
       <KitchenStory {...props} desks={desks} />
-      <View style={styles.row}>
-        <Action
-          theme={props.theme}
-          title={props.layout.compact ? "Stages" : "List"}
-          value="list"
-          onAction={chooseMode}
-          selected={mode === "list"}
-        />
-        <Action
-          theme={props.theme}
-          title="Map"
-          value="map"
-          onAction={chooseMode}
-          selected={mode === "map"}
-        />
+      <View style={styles.header}>
+        <View style={styles.row}>
+          <Action
+            theme={props.theme}
+            title={props.layout.compact ? "Stages" : "List"}
+            value="list"
+            onAction={chooseMode}
+            selected={mode === "list"}
+            compact={props.layout.compact}
+          />
+          <Action
+            theme={props.theme}
+            title="Map"
+            value="map"
+            onAction={chooseMode}
+            selected={mode === "map"}
+            compact={props.layout.compact}
+          />
+          {mode === "map" ? (
+            <StationPicker {...props} desks={desks} selected={selected} onSelect={setSelected} />
+          ) : null}
+        </View>
+        {mode === "map" ? (
+          <View style={styles.row}>
+            <Action
+              theme={props.theme}
+              title="−"
+              accessibilityLabel="Zoom out"
+              value={-10}
+              onAction={zoomBy}
+              disabled={zoom <= 60}
+              compact={props.layout.compact}
+            />
+            <Text style={styles.text}>{zoom}%</Text>
+            <Action
+              theme={props.theme}
+              title="+"
+              accessibilityLabel="Zoom in"
+              value={10}
+              onAction={zoomBy}
+              disabled={zoom >= 180}
+              compact={props.layout.compact}
+            />
+            <Action
+              theme={props.theme}
+              title="Fit"
+              value="fit"
+              onAction={fit}
+              compact={props.layout.compact}
+            />
+          </View>
+        ) : null}
       </View>
       <View style={columns}>
         <View style={mapColumn}>
           {mode === "map" ? (
             <>
-              <View style={styles.row}>
-                <Action
-                  theme={props.theme}
-                  title="Zoom out"
-                  accessibilityLabel="Zoom out"
-                  value={-10}
-                  onAction={zoomBy}
-                  disabled={zoom <= 60}
-                />
-                <Text style={styles.text}>{zoom}%</Text>
-                <Action
-                  theme={props.theme}
-                  title="Zoom in"
-                  accessibilityLabel="Zoom in"
-                  value={10}
-                  onAction={zoomBy}
-                  disabled={zoom >= 180}
-                />
-                <Action theme={props.theme} title="Fit" value="fit" onAction={fit} />
-              </View>
               {reason ? <Text style={styles.muted}>{reason}</Text> : null}
-              <StationShortcuts
-                {...props}
-                desks={desks}
-                selected={selected}
-                onSelect={setSelected}
-              />
               {Platform.OS === "web" ? <View ref={container} style={canvasStyle} /> : null}
               {fallback ? (
                 <NativeKitchenMap
@@ -272,24 +283,55 @@ function StageList(
     </View>
   );
 }
-function StationShortcuts(props: Parameters<typeof StageList>[0]) {
+function StationPicker(props: Parameters<typeof StageList>[0]) {
   const styles = useFactoryStyles(props);
+  const [expanded, setExpanded] = useState(false);
+  const trigger = useRef<View>(null);
+  const open = useCallback(() => setExpanded(true), []);
+  const close = useCallback(() => {
+    setExpanded(false);
+    (trigger.current as unknown as { focus?(): void } | null)?.focus?.();
+  }, []);
+  const { onSelect } = props;
+  const select = useCallback(
+    (value: string) => {
+      onSelect(value);
+      close();
+    },
+    [onSelect, close],
+  );
+  const station = kitchenStations.find((value) => `station:${value.id}` === props.selected);
   return (
-    <ScrollView horizontal>
-      <View style={styles.row}>
-        {kitchenStations.map((station) => (
-          <Action
-            key={station.id}
-            theme={props.theme}
-            title={station.title}
-            accessibilityLabel={`Select station ${station.title}`}
-            value={`station:${station.id}`}
-            onAction={props.onSelect}
-            selected={props.selected === `station:${station.id}`}
-          />
-        ))}
-      </View>
-    </ScrollView>
+    <>
+      <Action
+        theme={props.theme}
+        title={station?.title || "Stations"}
+        accessibilityLabel="Choose Kitchen station"
+        value={null}
+        onAction={open}
+        compact={props.layout.compact}
+        trailing="⌄"
+        buttonRef={trigger}
+      />
+      {expanded ? (
+        <SurfaceSheet {...props} title="Kitchen stations" onClose={close} narrow>
+          <View style={styles.stack}>
+            {kitchenStations.map((value) => (
+              <Action
+                key={value.id}
+                theme={props.theme}
+                title={value.title}
+                accessibilityLabel={`Select station ${value.title}`}
+                value={`station:${value.id}`}
+                onAction={select}
+                selected={props.selected === `station:${value.id}`}
+                compact={props.layout.compact}
+              />
+            ))}
+          </View>
+        </SurfaceSheet>
+      ) : null}
+    </>
   );
 }
 function StageRow(
@@ -402,5 +444,5 @@ function useOfficeAgents(props: OfficeProps) {
 }
 
 function canvasHeight(compact: boolean, viewportHeight: number) {
-  return compact ? 420 : Math.max(300, Math.min(580, viewportHeight - 450));
+  return compact ? 420 : Math.max(320, Math.min(600, viewportHeight - 340));
 }
