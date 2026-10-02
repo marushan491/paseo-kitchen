@@ -18,6 +18,7 @@ import { RuntimeProfile } from "./runtime-profile.js";
 import { Action, Disclosure, Field, SurfaceSheet, useFactoryStyles } from "./ui.js";
 
 const emptyProfile: RoleProfileOverride = {};
+const emptySkills: string[] = [];
 const noRoleSelection = () => {};
 const defaultAutonomy = {
   architecture: "human" as const,
@@ -207,7 +208,7 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
     <View style={styles.stack}>
       <View style={styles.header}>
         <View style={styles.roleSummary}>
-          <Text style={styles.title}>Team & workflow editor</Text>
+          <Text style={styles.title}>Team editor</Text>
           <Text style={styles.muted}>
             Describe the team you need. Follow how work passes between its roles.
           </Text>
@@ -273,16 +274,17 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
       {definition ? (
         <Disclosure
           theme={props.theme}
-          title="Workflow rules"
+          title="Team rules"
           summary="Delegation, communication and decisions. Verification and final acceptance stay protected."
         >
           <Field
             theme={props.theme}
-            label="Workflow name"
+            label="Team name"
             value={definition.title}
             onChange={updateName}
           />
           <AutonomyRules {...props} definition={definition} onChange={setDraft} />
+          <HeadChefPreferences {...props} definition={definition} onChange={setDraft} />
           <Text style={styles.text}>
             Independent verification and your final acceptance are required.
           </Text>
@@ -350,7 +352,9 @@ function WorkflowRoleEditor(
   const [communication, setCommunication] = useState(
     initial.communication || {
       clarification: "head-chef" as const,
-      investigation: "request-work" as const,
+      investigation: initial.tools.includes("item_request_work")
+        ? ("request-work" as const)
+        : ("human" as const),
     },
   );
   const [profile, setProfile] = useState<RoleProfileOverride>(
@@ -660,6 +664,51 @@ function SkillChips(
     </View>
   );
 }
+function HeadChefPreferences(
+  props: PluginSurfaceProps & {
+    definition: WorkflowDefinition;
+    onChange(value: WorkflowDefinition): void;
+  },
+) {
+  const [cwd, setCwd] = useState("");
+  const { definition, onChange } = props;
+  const profile = definition.headChefProfile || emptyProfile;
+  const update = useCallback(
+    (value: RoleProfileOverride) =>
+      onChange({
+        ...variantOf(definition),
+        headChefProfile: value,
+      }),
+    [definition, onChange],
+  );
+  const instructions = useCallback(
+    (value: string) => update({ ...profile, instructions: value }),
+    [profile, update],
+  );
+  const skills = useCallback(
+    (value: string[]) => update({ ...profile, skills: value }),
+    [profile, update],
+  );
+  return (
+    <Disclosure
+      theme={props.theme}
+      title="Head Chef preferences"
+      summary="Inherits your configured model. Override it for new missions using this team."
+    >
+      <RuntimeProfile {...props} cwd={cwd} onCwd={setCwd} value={profile} onChange={update} />
+      <Field
+        theme={props.theme}
+        label="Coordination instructions"
+        value={profile.instructions || ""}
+        onChange={instructions}
+        multiline
+        placeholder="How should Head Chef coordinate this team?"
+      />
+      <SkillChips {...props} value={profile.skills || emptySkills} onChange={skills} />
+    </Disclosure>
+  );
+}
+
 function AutonomyRules(
   props: PluginSurfaceProps & {
     definition: WorkflowDefinition;

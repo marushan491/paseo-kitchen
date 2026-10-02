@@ -252,11 +252,13 @@ describe("native Kitchen adapter", () => {
     const result = await startNativeMission(f.paseo, f.service, {
       ...f.input,
       presetId: variant.id,
+      routingMode: "auto",
     });
     expect(f.create.mock.calls[0]![0].config).toMatchObject({
       provider: "codex/project-model",
       systemPrompt: expect.stringContaining("Respect source defaults"),
     });
+    expect(f.create.mock.calls[0]![0].labels).toMatchObject({ "pandaos.routing.mode": "manual" });
     expect((await f.service.status(result.teamId)).state.team.roleProfiles.developer).toMatchObject(
       { provider: "opencode", model: "project-developer", thinking: "high" },
     );

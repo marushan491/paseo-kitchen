@@ -5,9 +5,18 @@ import {
   useRpc,
 } from "@getpaseo/plugin/client";
 import { useQuery } from "@tanstack/react-query";
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { ScrollView, Text, View } from "react-native";
-import { factoryList, factoryPacks, type TeamState } from "../shared/factory-contracts.js";
+import type { z } from "zod";
+import {
+  factoryList,
+  factoryPacks,
+  FactoryPackSchema,
+  type TeamState,
+} from "../shared/factory-contracts.js";
+import { KITCHEN_EXECUTION_ID } from "../shared/native-contracts.js";
+import { missionInProject } from "../shared/mission-stage.js";
+import type { NativeNavigation } from "./native-entry.js";
 import { Action, useFactoryStyles } from "./ui.js";
 import { Choice } from "./choice.js";
 import { MissionList } from "./mission-summary.js";
@@ -32,16 +41,49 @@ const settingsTitles = {
 };
 const settingsPages = ["Kitchen", "Overview", "Migration", "Improvements"] as const;
 type Section = (typeof sections)[number];
+interface StudioProps
+  extends PluginSurfaceProps, Partial<Pick<PluginAgentPanelProps, "workspaceId" | "agentId">> {
+  params?: Record<string, string>;
+}
 
-export function Studio(
-  props: PluginSurfaceProps & Partial<Pick<PluginAgentPanelProps, "workspaceId" | "agentId">>,
-) {
+export function Studio(props: StudioProps) {
+  const theme = useMemo(() => {
+    const hex = props.theme.colors.surface0.replace("#", "");
+    const dark =
+      /^[0-9a-f]{6}$/i.test(hex) &&
+      [0, 2, 4].reduce((sum, offset) => sum + parseInt(hex.slice(offset, offset + 2), 16), 0) < 384;
+    if (!dark) return props.theme;
+    return {
+      ...props.theme,
+      colors: {
+        ...props.theme.colors,
+        surface0: "#080e15",
+        surface1: "#101922",
+        surface2: "#17232f",
+        border: "#293642",
+        foreground: "#edf2f8",
+        foregroundMuted: "#9aaaba",
+        accent: "#9d7bff",
+        accentForeground: "#14082d",
+      },
+    };
+  }, [props.theme]);
+  return <StudioContent {...props} theme={theme} />;
+}
+
+function StudioContent(props: StudioProps) {
   const styles = useFactoryStyles(props);
   const paseo = usePaseo();
-  const [section, setSection] = useState<Section>(props.agentId ? "Missions" : "Overview");
+  const [section, setSection] = useState<Section>("Overview");
   const [project, setProject] = useState("");
-  const [createNew, setCreateNew] = useState(Boolean(props.agentId));
-  const [selectedTeam, setSelectedTeam] = useState("");
+  const [selectedTeam, setSelectedTeam] = useState(props.params?.teamId || "");
+  useEffect(() => {
+    if (props.params?.teamId) {
+      setSelectedTeam(props.params.teamId);
+      setSection("Missions");
+    } else if (props.params?.section && sections.includes(props.params.section as Section))
+      setSection(props.params.section as Section);
+  }, [props.params]);
   const [selectedAgent, setSelectedAgent] = useState("");
   const list = useRpc(factoryList);
   const packsRpc = useRpc(factoryPacks);
@@ -66,29 +108,29 @@ export function Studio(
   );
   const allTeams = teams.data?.teams || emptyTeams;
   const visibleTeams = useMemo(
-    () =>
-      allTeams.filter(
-        (state) =>
-          !project || state.team.cwd === project || state.team.cwd.startsWith(project + "/"),
-      ),
+    () => allTeams.filter((state) => missionInProject(state, project)),
     [allTeams, project],
   );
   const configured = useMemo(
     () => findBinding(visibleTeams, selectedAgent),
     [visibleTeams, selectedAgent],
   );
-  const configuredRoles = getConfiguredRoles(packs.data, configured?.state.team.packId);
   const openTeam = useCallback((id: string) => {
     setSelectedTeam(id);
-    setCreateNew(false);
     setSection("Missions");
   }, []);
+  const nativeNavigation = props.navigation as NativeNavigation | undefined;
+  const nativeReady = Boolean(nativeNavigation?.openNewWorkspace);
   const newMission = useCallback(() => {
-    setSelectedTeam("");
-    setCreateNew(true);
-    setSection("Missions");
-  }, []);
-  const cancelMission = useCallback(() => setCreateNew(false), []);
+    nativeNavigation?.openNewWorkspace?.({
+      executionId: KITCHEN_EXECUTION_ID,
+      cwd: project || undefined,
+      projectId: projects.data?.projects.find((entry) => entry.projectRootPath === project)
+        ?.projectId,
+      serverId: props.host.id,
+    });
+  }, [nativeNavigation, project, projects.data, props.host.id]);
+  const startAction = nativeReady ? newMission : undefined;
   const selectSection = useCallback((value: Section) => {
     setSection(value);
     setSelectedAgent("");
@@ -127,17 +169,17 @@ export function Studio(
                 />
               </View>
             ) : null}
-            {!createNew ? (
-              <Action
-                theme={props.theme}
-                title="Start mission"
-                accessibilityLabel="Start mission"
-                compact={props.layout.compact}
-                variant="primary"
-                value="new"
-                onAction={newMission}
-              />
-            ) : null}
+
+            <Action
+              theme={props.theme}
+              title="Start mission"
+              accessibilityLabel="Start mission"
+              compact={props.layout.compact}
+              variant="primary"
+              value="new"
+              onAction={newMission}
+              disabled={!nativeReady}
+            />
           </View>
         </View>
         <ScrollView
@@ -163,16 +205,21 @@ export function Studio(
           <Text style={styles.danger}>Projects could not load: {String(projects.error)}</Text>
         ) : null}
       </View>
+      {!nativeReady ? (
+        <Text style={styles.muted}>
+          Native Kitchen chat needs an updated host with plugin execution modes. Existing missions
+          remain available here.
+        </Text>
+      ) : null}
       {section === "Missions" ? (
         <Factory
-          key={`${selectedTeam}:${createNew}`}
+          key={selectedTeam}
           {...props}
           projectPath={project}
           selectedTeamId={selectedTeam}
-          createNew={createNew}
+          createNew={false}
           onCreated={openTeam}
-          onNew={newMission}
-          onCancel={cancelMission}
+          onNew={startAction}
         />
       ) : null}
       {section === "Overview" ? (
@@ -184,35 +231,18 @@ export function Studio(
         />
       ) : null}
       {section === "Kitchen" ? (
-        <ScrollView contentContainerStyle={styles.content}>
-          {teams.isPending ? <Text style={styles.muted}>Loading Kitchen…</Text> : null}
-          {teams.error ? <Text style={styles.danger}>{String(teams.error)}</Text> : null}
-          <Office
-            {...props}
-            teams={visibleTeams}
-            onOpenTeam={openTeam}
-            onConfigureAgent={setSelectedAgent}
-            onNewMission={newMission}
-          />
-          <MissionList
-            {...props}
-            teams={visibleTeams}
-            packs={packs.data?.packs || emptyPacks}
-            projectPath={project}
-            onOpen={openTeam}
-            onNew={newMission}
-          />
-          {configured ? (
-            <WorkItemProfileSettings
-              key={configured.binding.id}
-              {...props}
-              state={configured.state}
-              workItemId={configured.binding.workItemId}
-              initialRole={configured.binding.role}
-              roles={configuredRoles}
-            />
-          ) : null}
-        </ScrollView>
+        <KitchenScene
+          {...props}
+          teams={visibleTeams}
+          packs={packs.data}
+          loading={teams.isPending}
+          error={teams.error}
+          project={project}
+          configured={configured}
+          onOpen={openTeam}
+          onConfigure={setSelectedAgent}
+          onNew={startAction}
+        />
       ) : null}
       {section === "Team" ? (
         <ScrollView contentContainerStyle={styles.content}>
@@ -280,4 +310,56 @@ function getConfiguredRoles(
   packId?: string,
 ) {
   return data?.packs.find((pack) => pack.id === packId)?.workflow.roles || emptyRoles;
+}
+
+function KitchenScene(
+  props: PluginSurfaceProps & {
+    teams: TeamState[];
+    packs?: { packs: z.infer<typeof FactoryPackSchema>[] };
+    loading: boolean;
+    error: unknown;
+    project: string;
+    configured: ReturnType<typeof findBinding>;
+    onOpen(id: string): void;
+    onConfigure(id: string): void;
+    onNew?: () => void;
+  },
+) {
+  const styles = useFactoryStyles(props);
+  const configured = props.configured;
+  const roles =
+    configured?.state.team.workflowSnapshot?.roles ||
+    getConfiguredRoles(props.packs, configured?.state.team.packId);
+  return (
+    <ScrollView contentContainerStyle={styles.content}>
+      {props.loading ? <Text style={styles.muted}>Loading Kitchen…</Text> : null}
+      {props.error ? <Text style={styles.danger}>{String(props.error)}</Text> : null}
+      <Office
+        {...props}
+        teams={props.teams}
+        packs={props.packs?.packs || emptyPacks}
+        onOpenTeam={props.onOpen}
+        onConfigureAgent={props.onConfigure}
+        onNewMission={props.onNew}
+      />
+      <MissionList
+        {...props}
+        teams={props.teams}
+        packs={props.packs?.packs || emptyPacks}
+        projectPath={props.project}
+        onOpen={props.onOpen}
+        onNew={props.onNew}
+      />
+      {configured ? (
+        <WorkItemProfileSettings
+          key={configured.binding.id}
+          {...props}
+          state={configured.state}
+          workItemId={configured.binding.workItemId}
+          initialRole={configured.binding.role}
+          roles={roles}
+        />
+      ) : null}
+    </ScrollView>
+  );
 }

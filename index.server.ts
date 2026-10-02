@@ -14,6 +14,7 @@ import {
 } from "./server/system-one.js";
 import { loadKitchenRuntimeConfig, readOperatorCredential } from "./server/runtime-config.js";
 import { registerKitchenSuggestions } from "./server/kitchen-suggestion.js";
+import { registerNativeEntry } from "./server/native-entry.js";
 
 export default function contribute(server: PluginServerContext) {
   const host = server as PluginServerContext & { paseo?: PaseoApi; dataDirectory?: string };
@@ -105,6 +106,7 @@ export default function contribute(server: PluginServerContext) {
     decisionSource,
     service: factory.getService,
   });
+  const removeNativeEntry = registerNativeEntry(server, factory.getService);
   let disposed = false;
   let legacyClient: PaseoClient | undefined;
   const startup = (async () => {
@@ -137,6 +139,7 @@ export default function contribute(server: PluginServerContext) {
   return async () => {
     disposed = true;
     removeSuggestions();
+    removeNativeEntry();
     removeSettings();
     await removeDashboard();
     await improvements.cleanup();

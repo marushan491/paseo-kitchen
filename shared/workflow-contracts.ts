@@ -49,6 +49,7 @@ export const WorkflowDefinitionSchema = z.object({
   basePackVersion: z.number().int().positive(),
   title: z.string().min(1).max(160),
   roleProfiles: z.record(WorkflowIdSchema, RoleProfileOverrideSchema).optional(),
+  headChefProfile: RoleProfileOverrideSchema.optional(),
   runtimePolicy: z
     .object({
       maxReturns: z.number().int().nonnegative(),

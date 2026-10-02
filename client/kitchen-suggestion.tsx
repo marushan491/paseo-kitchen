@@ -9,8 +9,10 @@ export function KitchenSuggestionCard({
   theme,
   layout,
   openKitchen,
+  canOpen,
 }: PluginTimelineItemProps<KitchenSuggestion> & {
   openKitchen(suggestion: KitchenSuggestion): void;
+  canOpen: boolean;
 }) {
   const [dismissed, setDismissed] = useState(false);
   const open = useCallback(() => openKitchen(item.data), [openKitchen, item.data]);
@@ -37,10 +39,19 @@ export function KitchenSuggestionCard({
       <Text style={styles.title}>Want Kitchen to coordinate this project?</Text>
       <Text style={styles.description}>{item.data.reason}</Text>
       <Text style={styles.description}>
-        Review the goal and define Done when. Work starts only after you choose Start Kitchen.
+        {canOpen
+          ? "Review the brief in the chat composer. Work starts when you send it."
+          : "Update the host to start a Kitchen mission from this conversation."}
       </Text>
       <View style={styles.actions}>
-        <Action theme={theme} title="Open Kitchen" value="open" onAction={open} variant="primary" />
+        <Action
+          theme={theme}
+          title="Review Kitchen mission"
+          value="open"
+          onAction={open}
+          disabled={!canOpen}
+          variant="primary"
+        />
         <Action theme={theme} title="Keep chatting" value="dismiss" onAction={dismiss} />
       </View>
     </View>

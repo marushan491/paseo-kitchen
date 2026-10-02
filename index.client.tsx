@@ -6,6 +6,7 @@ import type {
 import { useCallback } from "react";
 import { Studio, StudioSettings } from "./client/studio.js";
 import { Action } from "./client/ui.js";
+import { registerNativeExecution, type NativeNavigation } from "./client/native-entry.js";
 import { registerFactoryClient } from "./client/registration.js";
 import { KitchenSuggestionCard } from "./client/kitchen-suggestion.js";
 import {
@@ -20,6 +21,8 @@ function FactoryItem({ theme, openScreen }: PluginSidebarItemProps) {
 }
 
 export default function contribute(client: PluginClientContext) {
+  const nativeClient = client as PluginClientContext & Pick<NativeNavigation, "openNewWorkspace">;
+  const removeNative = registerNativeExecution(client);
   const removeFactory = registerFactoryClient(client, {
     Factory: Studio,
     Settings: StudioSettings,
@@ -28,13 +31,20 @@ export default function contribute(client: PluginClientContext) {
   function Suggestion(props: PluginTimelineItemProps<KitchenSuggestion>) {
     const openKitchen = useCallback(
       (suggestion: KitchenSuggestion) =>
-        client.openPanel("factory-agent", {
-          workspaceId: suggestion.workspaceId,
-          agentId: suggestion.sourceAgentId,
+        nativeClient.openNewWorkspace?.({
+          executionId: "kitchen",
+          cwd: suggestion.cwd,
+          initialText: suggestion.objective,
         }),
       [],
     );
-    return <KitchenSuggestionCard {...props} openKitchen={openKitchen} />;
+    return (
+      <KitchenSuggestionCard
+        {...props}
+        openKitchen={openKitchen}
+        canOpen={typeof nativeClient.openNewWorkspace === "function"}
+      />
+    );
   }
   const removeSuggestion =
     typeof client.addTimelineRenderer === "function"
@@ -46,6 +56,7 @@ export default function contribute(client: PluginClientContext) {
         })
       : undefined;
   return () => {
+    removeNative();
     removeSuggestion?.();
     removeFactory();
   };
