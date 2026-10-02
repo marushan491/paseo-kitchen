@@ -1,17 +1,7 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "ignorePatterns": [
-    ".dev/**"
-  ],
-  "plugins": [
-    "react",
-    "react-perf",
-    "unicorn",
-    "typescript",
-    "oxc",
-    "import",
-    "promise"
-  ],
+  "ignorePatterns": [".dev/**"],
+  "plugins": ["react", "react-perf", "unicorn", "typescript", "oxc", "import", "promise"],
   "categories": {
     "correctness": "error",
     "suspicious": "error",
@@ -61,10 +51,7 @@
     "typescript/prefer-as-const": "error",
     "typescript/no-this-alias": "error",
     "typescript/no-unnecessary-type-assertion": "error",
-    "typescript/consistent-type-definitions": [
-      "error",
-      "interface"
-    ],
+    "typescript/consistent-type-definitions": ["error", "interface"],
     "import/no-unassigned-import": [
       "error",
       {
