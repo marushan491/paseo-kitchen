@@ -161,6 +161,7 @@ export function updateGraphConnection(
   if (edge.kind === "children") phase.completeWithChildren = target;
   if (edge.kind === "skip") phase.skipTo = target;
   if (maxReturns !== undefined) phase.maxReturns = maxReturns;
+  else delete phase.maxReturns;
   return {
     ...workflow,
     boards: {

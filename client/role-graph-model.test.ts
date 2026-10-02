@@ -51,6 +51,9 @@ it("updates only the selected outcome in an immutable draft and rejects stale or
   const edge = graphConnections(workflow).find((value) => value.label === "changes")!;
   const next = updateGraphConnection(workflow, edge, "ready", 3);
   expect(next.boards.item.phases.review.outcomes).toEqual({ approved: "verify", changes: "ready" });
+  expect(
+    updateGraphConnection(next, { ...edge, to: "ready" }, "build").boards.item.phases.review,
+  ).not.toHaveProperty("maxReturns");
   expect(workflow.boards.item.phases.review.outcomes).toEqual({
     approved: "verify",
     changes: "build",
