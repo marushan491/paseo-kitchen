@@ -1,3 +1,4 @@
+import { resolveAgentCapacity } from "./capacity-policy.js";
 import type { KitchenDecisionSource } from "./system-one.js";
 import {
   captureTrackedFiles,
@@ -76,9 +77,6 @@ const MAX_ATTEMPTS = 5;
 const NO_PROGRESS_MS = 45 * 60_000;
 const MAX_ERROR_RETRIES = 4;
 const KITCHEN_REQUEST_LABEL = "agent-factory.kitchen.request";
-const LIMITS = {
-  maxActiveCooks: 4,
-};
 
 export type { StartKitchenInput } from "./types.js";
 
@@ -145,6 +143,7 @@ export class TeamService {
   }
 
   async start(): Promise<void> {
+    this.capacity();
     this.stopped = false;
     for (const teamId of await this.store.listIds()) {
       try {
@@ -185,11 +184,12 @@ export class TeamService {
     this.stop();
     await this.dispatchRun;
   }
+  private capacity(): number {
+    return resolveAgentCapacity(this.options.maxConcurrentAgents?.());
+  }
+
   private limitPack(pack: WorkflowPack): WorkflowPack {
-    const limit = this.options.maxConcurrentAgents?.() ?? pack.maxParallel;
-    if (!Number.isInteger(limit) || limit < 1)
-      throw new Error("Factory concurrency must be positive");
-    return { ...pack, maxParallel: Math.min(pack.maxParallel, limit) };
+    return { ...pack, maxParallel: this.capacity() };
   }
   private pack(team: Team): WorkflowPack {
     const pack = this.options.packs.get(team.packId);
@@ -252,6 +252,8 @@ export class TeamService {
     await this.store.commit(teamId, async (draft) => {
       const events: TeamEventDraft[] = [];
       const legacyReason = clearLegacyRuntimeLimit(draft.team);
+      const runtime = (draft.team.runtime ??= runtimeState(draft.team.policy, this.capacity()));
+      runtime.limits.maxActiveCooks = this.capacity();
       if (legacyReason)
         events.push({ type: "safety.limit-migrated", actor: RUNTIME, text: legacyReason });
       for (const decision of Object.values(draft.decisions)) {
@@ -432,7 +434,7 @@ export class TeamService {
       bossAgentId: params.bossAgentId,
       roleProfiles,
     });
-    state.team.runtime = runtimeState(params.policy);
+    state.team.runtime = runtimeState(params.policy, this.capacity());
     state.team.policy = params.policy;
     if (params.kitchen) state.team.kitchen = params.kitchen;
     if (params.acceptanceCriteria)
@@ -990,7 +992,7 @@ export class TeamService {
   ): Promise<TeamState> {
     await this.store.commit(teamId, async (draft) => {
       assertMutableTeam(draft.team);
-      const runtime = (draft.team.runtime ??= runtimeState(draft.team.policy));
+      const runtime = (draft.team.runtime ??= runtimeState(draft.team.policy, this.capacity()));
       if (action === "accept")
         return { events: await this.acceptKitchen(draft, actorId, approval), result: null };
       if (draft.team.status === "canceled" || draft.team.status === "done") {
@@ -1825,11 +1827,7 @@ export class TeamService {
     const decision = state?.decisions[decisionId];
     if (
       (decision?.kind === "start-role" || decision?.kind === "message-role") &&
-      (await this.activeCookCount()) >=
-        Math.min(
-          LIMITS.maxActiveCooks,
-          this.options.maxConcurrentAgents?.() ?? LIMITS.maxActiveCooks,
-        )
+      (await this.activeCookCount()) >= this.capacity()
     )
       return;
     const leased = await this.store.commit(teamId, (draft) => {
@@ -2478,8 +2476,8 @@ export class TeamService {
     const limit = await this.store.commit(teamId, (draft) => {
       if (draft.team.status === "done" || draft.team.status === "canceled")
         return { events: [], result: false };
-      const runtime = (draft.team.runtime ??= runtimeState(draft.team.policy));
-      runtime.limits = runtimeState(draft.team.policy).limits;
+      const runtime = (draft.team.runtime ??= runtimeState(draft.team.policy, this.capacity()));
+      runtime.limits = runtimeState(draft.team.policy, this.capacity()).limits;
       for (const binding of Object.values(draft.bindings))
         chargeBinding(draft, binding, this.now().getTime(), true);
       runtime.usage.tokensAvailable = agents.length > 0 && observed.length === agents.length;
@@ -2699,10 +2697,13 @@ export async function readProjectProfile(
   return ProjectProfileSchema.parse(JSON.parse(text));
 }
 
-function runtimeState(policy?: Team["policy"]): NonNullable<Team["runtime"]> {
+function runtimeState(
+  policy?: Team["policy"],
+  capacity = resolveAgentCapacity(),
+): NonNullable<Team["runtime"]> {
   return {
     limits: {
-      ...LIMITS,
+      maxActiveCooks: capacity,
       roleActiveMs: policy?.roleActiveMs,
       totalActiveMs: policy?.totalActiveMs,
       observedTokens: policy?.maxTokens,
@@ -2820,7 +2821,7 @@ function clearLegacyRuntimeLimit(team: Team): string | undefined {
     (reason === "Team reached 500,000 observed tokens" && team.policy?.maxTokens === undefined);
   if (!removed) return undefined;
   team.runtime!.limitReason = undefined;
-  team.runtime!.limits = runtimeState(team.policy).limits;
+  team.runtime!.limits = runtimeState(team.policy, team.runtime!.limits.maxActiveCooks).limits;
   if (team.pausedReason === reason)
     team.pausedReason = "Previous default budget removed; resume to continue";
   return `Removed previous automatic limit: ${reason}`;

@@ -1,3 +1,4 @@
+import { factorySettings } from "../shared/preferences.js";
 import { workflowOf } from "./workflow-metadata.js";
 import { workflowConnections, roleTemplate } from "../shared/role-builder.js";
 import { FactoryWorkflowSchema } from "../shared/factory-contracts.js";
@@ -29,12 +30,12 @@ interface FakeRecord {
   routingNotice?: { status: "waiting"; reason: string; resetsAt: string };
 }
 
-function fakeHost() {
+function fakeHost(base = "/repo") {
   const records = new Map<string, FakeRecord>();
   records.set("boss", {
     id: "boss",
     provider: "codex",
-    cwd: "/repo",
+    cwd: base,
     labels: {},
     runtimeInfo: { model: "gpt-6.1-sol" },
     currentModeId: "full-access",
@@ -64,8 +65,8 @@ function fakeHost() {
           id: `agent-${n}`,
           provider: input.provider ?? "codex",
           cwd: input.worktree
-            ? `/repo/.worktrees/${input.worktree.worktreeName}`
-            : (input.cwd ?? "/repo"),
+            ? `${base}/.worktrees/${input.worktree.worktreeName}`
+            : (input.cwd ?? base),
           labels: input.labels ?? {},
           currentModeId: input.mode,
           thinkingOptionId: input.thinking,
@@ -679,6 +680,114 @@ describe("Plugin recovery and controls", () => {
     await svc.shutdown();
   });
 
+  it("dispatches twelve configured capacity slots and restores persisted capacity after reload", async () => {
+    const settingsPath = join(root, "settings.json");
+    await writeFile(
+      settingsPath,
+      JSON.stringify(factorySettings.schema.parse({ maxConcurrentAgents: 12 })),
+    );
+    const readSettings = async () =>
+      factorySettings.schema.parse(JSON.parse(await readFile(settingsPath, "utf8")));
+    const source = join(root, "source");
+    await mkdir(source);
+    const host = fakeHost(source);
+    const create = host.options.controller.create;
+    host.options.controller.create = async (input) => {
+      const result = await create(input);
+      const record = await host.options.controller.get(result.id);
+      await mkdir(record!.cwd, { recursive: true });
+      return result;
+    };
+    let configured = (await readSettings()).maxConcurrentAgents;
+    const options = { ...host.options, storageRoot: root, maxConcurrentAgents: () => configured };
+    let svc = new TeamService(options);
+    await svc.start();
+    const started = await svc.startTeam({
+      bossAgentId: "boss",
+      title: "Capacity",
+      objective: "Thirteen independent items",
+      packId: "kitchen",
+    });
+    await svc.dispatchAll();
+    const po = host.agentFor("po");
+    await svc.plan(
+      po.id,
+      Array.from({ length: 13 }, (_, index) => ({
+        key: `item-${index}`,
+        title: `Item ${index}`,
+        objective: "Implement independently",
+        acceptanceCriteria: ["works"],
+      })),
+    );
+    await svc.report(po.id, { outcome: "planned", summary: "Thirteen independent items" });
+    await svc.dispatchAll();
+    const state = (await svc.status(started.team.id)).state;
+    expect(
+      Object.values(state.items).filter((item) => item.parentId && item.phase === "implement"),
+    ).toHaveLength(12);
+    expect(itemByKey(state, "item-12").phase).toBe("ready");
+    expect(state.team.runtime!.limits.maxActiveCooks).toBe(12);
+    expect(Object.values(state.bindings).filter((binding) => binding.activeStartedAt)).toHaveLength(
+      12,
+    );
+    expect(host.prompts).toHaveLength(13);
+    await svc.store.commit(started.team.id, (draft) => {
+      draft.team.runtime!.limits.maxActiveCooks = 4;
+      return { events: [], result: null };
+    });
+    await svc.shutdown();
+    configured = (await readSettings()).maxConcurrentAgents;
+    svc = new TeamService({
+      ...options,
+      controller: {
+        ...options.controller,
+        get: async (id) => {
+          const record = await options.controller.get(id);
+          return record ? { ...record, running: id !== "boss" } : null;
+        },
+      },
+    });
+    await svc.start();
+    const recovered = (await svc.status(started.team.id)).state;
+    expect(recovered.team.runtime!.limits.maxActiveCooks).toBe(12);
+    expect(
+      Object.values(recovered.bindings).filter((binding) => binding.activeStartedAt),
+    ).toHaveLength(12);
+    await svc.shutdown();
+  });
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Infinity, NaN])(
+    "rejects invalid capacity %s before dispatch or creating agents",
+    async (capacity) => {
+      expect(factorySettings.schema.safeParse({ maxConcurrentAgents: capacity }).success).toBe(
+        false,
+      );
+      const host = fakeHost();
+      const svc = new TeamService({
+        ...host.options,
+        storageRoot: root,
+        maxConcurrentAgents: () => capacity,
+      });
+      await expect(svc.start()).rejects.toThrow("positive safe integer");
+      expect(host.created).toHaveLength(0);
+      await svc.shutdown();
+    },
+  );
+
+  it.each([12, 16, 20, Number.MAX_SAFE_INTEGER])(
+    "persists positive safe capacity %s without clamping",
+    async (capacity) => {
+      const path = join(root, "capacity.json");
+      await writeFile(
+        path,
+        JSON.stringify(factorySettings.schema.parse({ maxConcurrentAgents: capacity })),
+      );
+      expect(
+        factorySettings.schema.parse(JSON.parse(await readFile(path, "utf8"))).maxConcurrentAgents,
+      ).toBe(capacity);
+    },
+  );
+
   it("keeps live workers running after plugin reload", async () => {
     const host = fakeHost();
     let svc = makeService(root, host);
@@ -1028,7 +1137,7 @@ function kitchenFakeHost() {
         provider: "codex",
         cwd: input.worktree
           ? `${input.cwd ?? "/repo"}/.worktrees/${input.worktree.worktreeName}`
-          : (input.cwd ?? "/repo"),
+          : (input.cwd ?? base),
         labels: input.labels ?? {},
         title: input.title,
         workspaceId: input.workspaceId,
@@ -1056,6 +1165,7 @@ function kitchenFakeHost() {
 type KitchenTestOptions = ReturnType<typeof kitchenFakeHost>["options"] & {
   controllerOverrides?: Partial<TeamServiceOptions["controller"]>;
   policyUsage?: TeamServiceOptions["policyUsage"];
+  maxConcurrentAgents?: TeamServiceOptions["maxConcurrentAgents"];
   storageRoot: string;
   now?: () => Date;
   resolveWorkspace?: (
@@ -1078,6 +1188,7 @@ class KitchenTestService extends TeamService {
           : captureTrackedFiles(cwd),
       now: options.now,
       policyUsage: options.policyUsage,
+      maxConcurrentAgents: options.maxConcurrentAgents,
       controller: {
         get: async (id) => {
           const record = await options.agentStorage.get(id);
@@ -1611,6 +1722,42 @@ describe("Kitchen runtime", () => {
         .flatMap(({ state }) => Object.values(state.bindings))
         .filter((binding) => binding.activeStartedAt),
     ).toHaveLength(4);
+  });
+
+  it("shares twelve configured capacity slots across teams and drains queued starts", async () => {
+    const host = kitchenFakeHost();
+    const service = new KitchenTestService({
+      ...host.options,
+      storageRoot: root,
+      maxConcurrentAgents: () => 12,
+    });
+    const teams: TeamState[] = [];
+    for (let index = 0; index < 13; index++)
+      teams.push(
+        await service.startTeam({
+          bossAgentId: "boss",
+          title: `Capacity ${index}`,
+          objective: "Plan",
+        }),
+      );
+    await service.dispatchAll();
+    expect(host.created).toHaveLength(12);
+    await service.report(host.created[0]!.id, {
+      outcome: "planned",
+      summary: "No implementation needed",
+    });
+    await service.dispatchAll();
+    expect(host.created).toHaveLength(13);
+    const states = await Promise.all(teams.map((team) => service.status(team.team.id)));
+    expect(
+      states
+        .flatMap(({ state }) => Object.values(state.bindings))
+        .filter((binding) => binding.activeStartedAt),
+    ).toHaveLength(12);
+    expect(states.every(({ state }) => state.team.runtime!.limits.maxActiveCooks === 12)).toBe(
+      true,
+    );
+    await service.shutdown();
   });
 
   it("pauses only queued work but stop interrupts Cooks and rejects late reports", async () => {

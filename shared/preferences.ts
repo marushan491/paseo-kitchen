@@ -1,6 +1,9 @@
 import { defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
 
+export const DEFAULT_AGENT_CAPACITY = 4;
+export const AgentCapacitySchema = z.number().int().positive();
+
 export const factorySettings = defineSettings({
   id: "factory",
   scope: "host",
@@ -12,6 +15,6 @@ export const factorySettings = defineSettings({
     cliExecutable: z.string().default("paseo"),
     cliArguments: z.array(z.string()).default([]),
     packDirectory: z.string().default(""),
-    maxConcurrentAgents: z.number().int().min(1).max(16).default(4),
+    maxConcurrentAgents: AgentCapacitySchema.default(DEFAULT_AGENT_CAPACITY),
   }),
 });
