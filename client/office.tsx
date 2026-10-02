@@ -1,6 +1,6 @@
 import { type PluginSurfaceProps, usePaseo } from "@getpaseo/plugin/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, Pressable, Text, View } from "react-native";
+import { Platform, Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
 import type { TeamState } from "../shared/factory-contracts.js";
 import {
   officeAgentIds,
@@ -22,6 +22,7 @@ export type OfficeProps = PluginSurfaceProps & {
 };
 export function Office(props: OfficeProps) {
   const styles = useFactoryStyles(props);
+  const viewport = useWindowDimensions();
   const observed = useOfficeAgents(props);
   const desks = useMemo(
     () => projectOffice(props.teams, observed.agents),
@@ -95,12 +96,12 @@ export function Office(props: OfficeProps) {
   }, [selected, desks]);
   const canvasStyle = useMemo(
     () => ({
-      height: fallback ? 0 : canvasHeight(props.layout.compact),
+      height: fallback ? 0 : canvasHeight(props.layout.compact, viewport.height),
       borderRadius: 14,
       overflow: "hidden" as const,
       backgroundColor: props.theme.colors.surface1,
     }),
-    [props.layout.compact, props.theme, fallback],
+    [props.layout.compact, props.theme, fallback, viewport.height],
   );
   const columns = useMemo(
     () => ({
@@ -134,19 +135,6 @@ export function Office(props: OfficeProps) {
         <View style={mapColumn}>
           {mode === "map" ? (
             <>
-              {Platform.OS === "web" ? <View ref={container} style={canvasStyle} /> : null}
-              {fallback ? (
-                <NativeKitchenMap
-                  {...props}
-                  desks={desks}
-                  selected={selected}
-                  onSelect={setSelected}
-                  zoom={zoom}
-                  onZoom={setZoom}
-                  fitKey={fitKey}
-                  palette={palette}
-                />
-              ) : null}
               <View style={styles.row}>
                 <Action
                   theme={props.theme}
@@ -180,6 +168,19 @@ export function Office(props: OfficeProps) {
                 selected={selected}
                 onSelect={setSelected}
               />
+              {Platform.OS === "web" ? <View ref={container} style={canvasStyle} /> : null}
+              {fallback ? (
+                <NativeKitchenMap
+                  {...props}
+                  desks={desks}
+                  selected={selected}
+                  onSelect={setSelected}
+                  zoom={zoom}
+                  onZoom={setZoom}
+                  fitKey={fitKey}
+                  palette={palette}
+                />
+              ) : null}
             </>
           ) : (
             <StageList {...props} desks={desks} selected={selected} onSelect={setSelected} />
@@ -249,19 +250,21 @@ function StageList(
 function StationShortcuts(props: Parameters<typeof StageList>[0]) {
   const styles = useFactoryStyles(props);
   return (
-    <View style={styles.row}>
-      {kitchenStations.map((station) => (
-        <Action
-          key={station.id}
-          theme={props.theme}
-          title={station.title}
-          accessibilityLabel={`Select station ${station.title}`}
-          value={`station:${station.id}`}
-          onAction={props.onSelect}
-          selected={props.selected === `station:${station.id}`}
-        />
-      ))}
-    </View>
+    <ScrollView horizontal>
+      <View style={styles.row}>
+        {kitchenStations.map((station) => (
+          <Action
+            key={station.id}
+            theme={props.theme}
+            title={station.title}
+            accessibilityLabel={`Select station ${station.title}`}
+            value={`station:${station.id}`}
+            onAction={props.onSelect}
+            selected={props.selected === `station:${station.id}`}
+          />
+        ))}
+      </View>
+    </ScrollView>
   );
 }
 function StageRow(
@@ -359,6 +362,6 @@ function useOfficeAgents(props: OfficeProps) {
   return { agents, errors };
 }
 
-function canvasHeight(compact: boolean) {
-  return compact ? 420 : 580;
+function canvasHeight(compact: boolean, viewportHeight: number) {
+  return compact ? 420 : Math.max(300, Math.min(580, viewportHeight - 450));
 }
