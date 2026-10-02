@@ -15,6 +15,7 @@ import { visibleKitchenSchedules } from "../../shared/dashboard/kitchen-schedule
 
 type ScheduleControl = "pause" | "resume" | "run-once";
 type Props = PluginSurfaceProps & {
+  projectPath?: string;
   section: "overview" | "activity" | "problems";
   onOpenTeam?: (teamId?: string) => void;
 };
@@ -38,7 +39,12 @@ export function KitchenScheduleOverview(props: Props) {
     refetchIntervalInBackground: false,
   });
   const entries = visibleKitchenSchedules(
-    schedules.data?.schedules ?? [],
+    (schedules.data?.schedules ?? []).filter(
+      (entry) =>
+        !props.projectPath ||
+        entry.target.cwd === props.projectPath ||
+        entry.target.cwd?.startsWith(props.projectPath + "/"),
+    ),
     props.section === "problems",
   );
   const visible = expanded ? entries : entries.slice(0, 3);
@@ -46,8 +52,7 @@ export function KitchenScheduleOverview(props: Props) {
     <View style={styles.stack}>
       <Text style={styles.heading}>Kitchen schedules · {entries.length}</Text>
       <Text style={styles.muted}>
-        Kickoff outcomes and linked missions are separate. A dispatched mission still requires
-        verification and acceptance.
+        Scheduled goals run through the same review and acceptance process.
       </Text>
       {schedules.isPending ? <Text style={styles.muted}>Loading Kitchen schedules…</Text> : null}
       {schedules.error ? <Text style={styles.danger}>{String(schedules.error)}</Text> : null}

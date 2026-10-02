@@ -18,7 +18,7 @@ import {
   Vector2,
   WebGLRenderer,
 } from "three";
-import { officePosition, officeToneColor, type OfficeDesk } from "./office-model.js";
+import { officeToneColor, type OfficeDesk } from "./office-model.js";
 
 interface Pointer {
   clientX: number;
@@ -134,7 +134,7 @@ export function mountOffice(
   canvas.style.touchAction = "pan-y";
   canvas.setAttribute(
     "aria-label",
-    "Kitchen 3D office. Select a desk, or use the agent list below.",
+    "Kitchen 3D. Select an agent station, or use the accessible role list below.",
   );
   canvas.setAttribute("role", "img");
   container.appendChild(canvas);
@@ -232,7 +232,7 @@ export function mountOffice(
     const context = image.getContext("2d");
     if (!context) return;
     context.fillStyle = color;
-    context.font = "600 32px sans-serif";
+    context.font = "600 48px sans-serif";
     context.textAlign = "center";
     context.textBaseline = "middle";
     context.fillText(text.slice(0, 38), 384, 48);
@@ -241,7 +241,7 @@ export function mountOffice(
     );
     const sprite = new Sprite(new SpriteMaterial({ map, transparent: true, depthTest: false }));
     sprite.position.set(x, y, z);
-    sprite.scale.set(3.2, 0.4, 1);
+    sprite.scale.set(3.2, 0.5, 1);
     group.add(sprite);
   }
   return {
@@ -253,59 +253,146 @@ export function mountOffice(
         objects = new Group();
         scene.add(objects);
         scene.background = new Color(colors.background);
-        const width = Math.max(1, ...desks.map((desk) => desk.seat + 1)) * 3.4;
-        const depth = Math.max(1, ...desks.map((desk) => desk.lane + 1)) * 4.2;
+        const stationRoles = ["Head Chef", "po", "developer", "reviewer", "verifier", "integrator"];
+        const stations = desks.length
+          ? desks
+          : stationRoles.map((role) => ({
+              role,
+              title: stationTitle(role),
+              id: "",
+              tone: "unknown" as const,
+            }));
+        const columns = Math.min(3, Math.max(1, stations.length));
+        const rows = Math.ceil(stations.length / columns);
+        const width = columns * 3.4;
+        const depth = rows * 4.2;
+        const centerFloorX = width / 2 - 1.7;
+        const centerFloorZ = depth / 2 - 2.1;
         box(
           objects,
-          colors.surface,
+          colors.border,
           [width + 2, 0.18, depth + 2],
-          [width / 2 - 1.7, -0.1, depth / 2 - 2.1],
+          [centerFloorX, -0.1, centerFloorZ],
         );
-        const lanes = new Set<number>();
-        for (const desk of desks) {
-          const { x, z } = officePosition(desk);
-          if (!lanes.has(desk.lane)) {
-            lanes.add(desk.lane);
-            label(objects, desk.role, width / 2 - 1.7, 0.25, z - 1.8, colors.muted);
+        for (let col = 0; col < columns * 3 + 2; col++) {
+          for (let row = 0; row < rows * 4 + 2; row++) {
+            box(
+              objects,
+              (col + row) % 2 ? colors.surface : colors.border,
+              [1.04, 0.02, 1.04],
+              [col * 1.1 - 2.1, 0.01, row * 1.05 - 2.6],
+            );
           }
+        }
+        box(objects, colors.surface, [width + 2, 2.7, 0.14], [centerFloorX, 1.3, -3.15]);
+        box(objects, colors.surface, [0.14, 2.7, depth + 2], [-2.8, 1.3, centerFloorZ]);
+        for (let i = 0; i < stations.length; i++) {
+          const desk = stations[i]!;
+          const x = (i % columns) * 3.4;
+          const z = Math.floor(i / columns) * 4.2;
           const group = new Group();
           group.position.set(x, 0, z);
-          group.userData.deskId = desk.id;
+          if (desk.id) group.userData.deskId = desk.id;
           objects.add(group);
           const statusColor = officeToneColor(desk.tone, colors);
           box(
             group,
             desk.id === selectedId ? colors.accent : colors.border,
-            [2.5, 0.14, 2.3],
-            [0, 0, 0],
+            [2.6, 0.12, 2.65],
+            [0, 0.08, 0],
           );
-          box(group, colors.surface, [2.1, 0.18, 1], [0, 0.95, -0.25]);
-          box(group, colors.border, [0.13, 0.9, 0.13], [-0.85, 0.45, -0.5]);
-          box(group, colors.border, [0.13, 0.9, 0.13], [0.85, 0.45, -0.5]);
-          box(group, colors.foreground, [0.85, 0.6, 0.1], [0, 1.37, -0.5]);
-          box(group, statusColor, [0.7, 0.44, 0.03], [0, 1.37, -0.43]);
-          const body = new Mesh(
-            new CylinderGeometry(0.22, 0.3, 0.72, 10),
-            new MeshStandardMaterial({ color: statusColor }),
-          );
-          body.position.set(0, 0.7, 0.7);
-          group.add(body);
-          const head = new Mesh(
-            new SphereGeometry(0.24, 12, 8),
-            new MeshStandardMaterial({ color: colors.foreground }),
-          );
-          head.position.set(0, 1.3, 0.7);
-          group.add(head);
-          label(group, desk.title, 0, 2, 0, colors.foreground);
+          box(group, colors.surface, [2.25, 0.85, 1.1], [0, 0.5, -0.4]);
+          box(group, "#9ba4ab", [2.35, 0.12, 1.18], [0, 0.98, -0.4]);
+          box(group, colors.border, [0.03, 0.6, 0.02], [0, 0.5, 0.16]);
+          box(group, "#9ba4ab", [0.35, 0.06, 0.05], [-0.5, 0.68, 0.2]);
+          box(group, "#9ba4ab", [0.35, 0.06, 0.05], [0.5, 0.68, 0.2]);
+          const role = desk.role.toLowerCase();
+          if (role === "developer" || role === "integrator") {
+            box(group, "#26313a", [1.3, 0.04, 0.9], [0, 1.06, -0.4]);
+            for (const burnerX of [-0.34, 0.34]) {
+              const burner = new Mesh(
+                new CylinderGeometry(0.24, 0.24, 0.03, 24),
+                new MeshStandardMaterial({ color: "#627079" }),
+              );
+              burner.position.set(burnerX, 1.1, -0.45);
+              group.add(burner);
+            }
+            const pot = new Mesh(
+              new CylinderGeometry(0.26, 0.24, 0.28, 24),
+              new MeshStandardMaterial({ color: "#bcc5cb", metalness: 0.5, roughness: 0.3 }),
+            );
+            pot.position.set(-0.34, 1.25, -0.45);
+            group.add(pot);
+            box(group, "#9ba4ab", [1.65, 0.16, 0.9], [0, 2.35, -0.4]);
+            box(group, colors.border, [0.6, 0.5, 0.45], [0, 2.67, -0.6]);
+          } else if (role === "verifier" || role === "tester") {
+            box(group, "#42505c", [1.0, 0.03, 0.72], [0, 1.07, -0.4]);
+            box(group, "#d4dde3", [0.1, 0.45, 0.1], [0.5, 1.28, -0.78]);
+            box(group, "#d4dde3", [0.35, 0.08, 0.1], [0.35, 1.5, -0.78]);
+          } else if (role === "reviewer") {
+            for (const plateX of [-0.5, 0.15, 0.7]) {
+              const plate = new Mesh(
+                new CylinderGeometry(0.24, 0.2, 0.04, 24),
+                new MeshStandardMaterial({ color: "#eceee8" }),
+              );
+              plate.position.set(plateX, 1.09, -0.4);
+              group.add(plate);
+            }
+          } else {
+            box(group, "#ad8060", [1.25, 0.05, 0.7], [0, 1.07, -0.4]);
+            box(group, "#dde1d4", [0.3, 0.04, 0.3], [-0.3, 1.12, -0.4]);
+            box(group, colors.border, [1.6, 0.75, 0.08], [0, 1.8, -1]);
+            for (const ticketX of [-0.45, 0, 0.45])
+              box(group, "#e8e5d8", [0.28, 0.45, 0.03], [ticketX, 1.8, -0.94]);
+          }
+          if (desk.id) {
+            const body = new Mesh(
+              new CylinderGeometry(0.22, 0.3, 0.65, 12),
+              new MeshStandardMaterial({ color: statusColor }),
+            );
+            body.position.set(0, 0.75, 0.7);
+            group.add(body);
+            const head = new Mesh(
+              new SphereGeometry(0.22, 16, 12),
+              new MeshStandardMaterial({ color: "#dbc4ac" }),
+            );
+            head.position.set(0, 1.3, 0.7);
+            group.add(head);
+            const hat = new Mesh(
+              new CylinderGeometry(0.27, 0.22, 0.3, 16),
+              new MeshStandardMaterial({ color: "#f0efe9" }),
+            );
+            hat.position.set(0, 1.6, 0.7);
+            group.add(hat);
+            for (const legX of [-0.15, 0.15])
+              box(group, colors.border, [0.16, 0.4, 0.18], [legX, 0.32, 0.7]);
+          }
+          label(group, stationTitle(desk.role), 0, 0.2, 1.55, colors.foreground);
         }
         const centerX = width / 2 - 1.7;
         const centerZ = depth / 2 - 2.1;
         camera.position.set(centerX + 14, 20, centerZ + 20);
         camera.lookAt(centerX, 0, centerZ);
-        span = Math.max(5, (width + depth) * 0.38);
+        span = Math.max(6, (width + depth) * 0.32);
         resize();
       },
       dispose,
     },
   };
+}
+
+function stationTitle(role: string) {
+  return (
+    (
+      {
+        "Head Chef": "Head Chef · Coordination",
+        po: "Prep · Planning",
+        developer: "Stove · Build",
+        reviewer: "Plating · Review",
+        verifier: "Quality · Verify",
+        integrator: "Pass · Integration",
+        tester: "Quality · Tests",
+      } as Record<string, string>
+    )[role] || role
+  );
 }

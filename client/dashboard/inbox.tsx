@@ -212,7 +212,7 @@ export function InboxCard(props: PluginSurfaceProps & { item: InboxItem; state: 
   } = useInbox(props);
   return (
     <View style={styles.card}>
-      <Text style={styles.heading}>
+      <Text style={styles.heading} numberOfLines={2}>
         {LABELS[item.kind]} · {item.title}
       </Text>
       <Text style={styles.muted}>

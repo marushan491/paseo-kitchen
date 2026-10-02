@@ -27,7 +27,7 @@ it("registers a global Kitchen surface on the actual PandaOS 0.9 client API", ()
   expect(old.addSurface).toHaveBeenCalledWith("factory", Component);
   expect(old.addSidebarItem).toHaveBeenCalledWith({
     id: "factory",
-    title: "Kitchen",
+    title: "Kitchen Studio",
     icon: "Workflow",
     surface: "factory",
   });
@@ -60,12 +60,12 @@ it("prefers modern global registration when aliases are also available", () => {
   });
   expect(modern.addScreen).toHaveBeenCalledWith({
     id: "factory",
-    title: "Kitchen",
+    title: "Kitchen Studio",
     Component,
   });
   expect(modern.addSidebarHeaderItem).toHaveBeenCalledWith({
     id: "factory",
-    title: "Kitchen",
+    title: "Kitchen Studio",
     Component,
   });
   expect(modern.addSurface).not.toHaveBeenCalled();

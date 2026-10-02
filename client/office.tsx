@@ -16,6 +16,7 @@ export type OfficeProps = PluginSurfaceProps & {
   teams: TeamState[];
   onOpenTeam(teamId: string): void;
   onConfigureAgent?(agentId: string): void;
+  onNewMission?(): void;
 };
 
 export function Office(props: OfficeProps) {
@@ -25,7 +26,7 @@ export function Office(props: OfficeProps) {
   const [agents, setAgents] = useState<Record<string, OfficeAgentSnapshot>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [rendererStatus, setRendererStatus] = useState("Preparing 3D office…");
+  const [rendererStatus, setRendererStatus] = useState("Preparing Kitchen…");
   const container = useRef<View | null>(null);
   const renderer = useRef<OfficeRenderer | null>(null);
   const idsKey = JSON.stringify(officeAgentIds(teams));
@@ -99,7 +100,7 @@ export function Office(props: OfficeProps) {
       return;
     }
     renderer.current = mounted.renderer;
-    setRendererStatus("Live 3D · select a desk or agent below");
+    setRendererStatus("Live Kitchen · select a station or agent");
     return () => {
       mounted.renderer.dispose();
       renderer.current = null;
@@ -117,20 +118,33 @@ export function Office(props: OfficeProps) {
   return (
     <View style={styles.stack}>
       <View style={styles.row}>
-        <Text style={styles.title}>Live Office</Text>
+        <Text style={styles.title}>Kitchen</Text>
         <Text accessibilityLiveRegion="polite" style={styles.muted}>
           {rendererStatus}
         </Text>
       </View>
       <Text style={styles.muted}>
-        {desks.length} desks · {teams.length} Kitchens ·{" "}
+        {desks.length} agents · {teams.length} missions ·{" "}
         {desks.filter((desk) => desk.tone === "active").length} active ·{" "}
         {desks.filter((desk) => desk.tone === "attention").length} need attention
       </Text>
       <Text style={styles.muted}>
-        Desks represent actual role bindings. Agent activity comes from this host; Kitchen phases
-        follow the latest Kitchen snapshot.
+        Select a chef to see its assignment, status and role instructions.
       </Text>
+      {!desks.length && props.onNewMission ? (
+        <View style={styles.row}>
+          <Text style={styles.muted}>
+            No agents assigned yet. The stations below are an empty Kitchen.
+          </Text>
+          <Action
+            theme={theme}
+            title="Create a mission"
+            variant="primary"
+            value="new"
+            onAction={props.onNewMission}
+          />
+        </View>
+      ) : null}
       {Platform.OS === "web" ? <View ref={container} style={canvasStyle} /> : null}
       {selected ? (
         <View style={styles.card}>
@@ -161,7 +175,7 @@ export function Office(props: OfficeProps) {
             />
             <Action
               theme={theme}
-              title="Open Kitchen"
+              title="Open mission"
               value={selected.teamId}
               onAction={props.onOpenTeam}
             />
@@ -198,9 +212,12 @@ export function Office(props: OfficeProps) {
           ))}
         </View>
       ) : (
-        <Text style={styles.muted}>
-          No Kitchen agents yet. Start a Kitchen to see its actual team here.
-        </Text>
+        <View style={styles.card}>
+          <Text style={styles.heading}>Your Kitchen is ready</Text>
+          <Text style={styles.muted}>
+            The empty stations show the layout. Agents appear here after you start a mission.
+          </Text>
+        </View>
       )}
     </View>
   );
@@ -233,22 +250,6 @@ function Desk({
         borderRadius: 10,
         backgroundColor: palette.surface,
       },
-      scene: { height: 44, justifyContent: "center" as const, alignItems: "center" as const },
-      desk: {
-        width: 54,
-        height: 26,
-        backgroundColor: palette.border,
-        transform: [{ rotate: "-22deg" }],
-        borderRadius: 4,
-      },
-      figure: {
-        position: "absolute" as const,
-        width: 18,
-        height: 18,
-        borderRadius: 9,
-        backgroundColor: color,
-        top: 0,
-      },
       title: { color: palette.foreground, fontWeight: "600" as const },
       activity: { color },
       muted: { color: palette.muted },
@@ -263,10 +264,7 @@ function Desk({
       accessibilityLabel={`${desk.role}: ${desk.title}, ${desk.activity}, ${desk.teamTitle}`}
       style={style.card}
     >
-      <View style={style.scene}>
-        <View style={style.desk} />
-        <View style={style.figure} />
-      </View>
+      <Text style={style.title}>{desk.role}</Text>
       <Text numberOfLines={2} style={style.title}>
         {desk.title}
       </Text>

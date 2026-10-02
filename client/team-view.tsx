@@ -99,12 +99,14 @@ export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
         {state.team.status} · {state.team.packId} · revision {state.commit} · {state.team.cwd}
       </Text>
       <Text style={styles.muted}>
-        Kitchen keeps this run accessible when the native Team Agent tab is closed.
+        {state.team.kitchen?.missionMode === "goal-driven"
+          ? "Goal-driven · discovering and completing scoped work until the goal is verified."
+          : "Planned mission · following the agreed tasks."}
       </Text>
       <View style={styles.row}>
         <Action
           theme={theme}
-          title="Open native Team Agent chat"
+          title="Open Head Chef"
           value={state.team.bossAgentId}
           onAction={openAgent}
           disabled={!navigation}
@@ -502,14 +504,20 @@ function KitchenSafety(props: PluginSurfaceProps & { state: TeamState; events: T
         <>
           <Text style={styles.text}>Maximum active Cooks: {runtime.limits.maxActiveCooks}</Text>
           <Text style={styles.text}>
-            Role limit: {Math.round(runtime.limits.roleActiveMs / 60000)} active minutes · Run
-            limit: {Math.round(runtime.limits.totalActiveMs / 60000)} active minutes ·
-            Observed-token threshold: {runtime.limits.observedTokens}
+            Role budget:{" "}
+            {runtime.limits.roleActiveMs
+              ? Math.round(runtime.limits.roleActiveMs / 60000) + " active minutes"
+              : "No limit"}{" "}
+            · Total budget:{" "}
+            {runtime.limits.totalActiveMs
+              ? Math.round(runtime.limits.totalActiveMs / 60000) + " active minutes"
+              : "No limit"}{" "}
+            · Token budget: {runtime.limits.observedTokens ?? "No limit"}
           </Text>
           {!runtime.usage.tokensAvailable ? (
             <Text style={styles.muted}>
-              Provider token totals are unavailable on this SDK; the token threshold cannot be
-              enforced from those totals.
+              Observed provider token totals are unavailable. A selected token or money budget
+              requires a complete trusted ledger before further paid starts.
             </Text>
           ) : null}
           {runtime.limitReason ? <Text style={styles.danger}>{runtime.limitReason}</Text> : null}

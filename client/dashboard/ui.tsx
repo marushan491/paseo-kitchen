@@ -114,7 +114,13 @@ export function useDashboardStyles({ theme, layout }: Pick<PluginHostProps, "the
   return useMemo(
     () => ({
       screen: { flex: 1, backgroundColor: theme.colors.surface0 },
-      content: { padding: layout.compact ? 16 : 24, gap: 24 },
+      content: {
+        padding: layout.compact ? 16 : 28,
+        gap: 20,
+        maxWidth: 1180,
+        width: "100%" as const,
+        alignSelf: "center" as const,
+      },
       row: {
         flexDirection: "row" as const,
         flexWrap: "wrap" as const,
@@ -145,7 +151,7 @@ export function useDashboardStyles({ theme, layout }: Pick<PluginHostProps, "the
       title: { color: theme.colors.foreground, fontSize: 24, fontWeight: "600" as const },
       heading: { color: theme.colors.foreground, fontSize: 17, fontWeight: "600" as const },
       text: { color: theme.colors.foreground },
-      muted: { color: theme.colors.foregroundMuted },
+      muted: { color: theme.colors.foregroundMuted, fontSize: 13, lineHeight: 20 },
       danger: { color: theme.colors.statusDanger },
     }),
     [theme, layout.compact],

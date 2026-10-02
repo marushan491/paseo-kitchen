@@ -1,8 +1,8 @@
 # Kitchen Studio
 
-A portable, optional Paseo plugin combining a work dashboard, a live agent office and the Kitchen software workflow. Use **Overview**, **Activity** and **Problems** to handle agent questions, handoffs and failed schedules; **Office** to inspect the role hierarchy; **Missions** to coordinate verified work; and **Workflows** to configure reusable role profiles.
+A portable Paseo plugin for turning a goal into verified software. Give your Head Chef a feature, backlog or product goal, follow the agents in the live Kitchen, answer their questions and inspect the result before accepting it. The work dashboard and software factory share one plugin. Projects are selected once in the Studio header.
 
-A Head Chef coordinates planned work, isolated developer worktrees, editable reviews, independent verification, combined integration and human acceptance. The plugin owns its persisted jobs, bindings, queue, evidence, runtime limits and Kitchen schedules. It uses public Paseo APIs and the public host CLI.
+A Head Chef coordinates remaining work, isolated developer worktrees, editable reviews, independent verification, combined integration and human acceptance. The plugin owns its persisted jobs, bindings, queue, evidence, runtime limits and Kitchen schedules. It uses public Paseo APIs and the public host CLI.
 
 The hierarchy is inspired by [Agent Crew](https://paseo.cafe/plugins/agent-crew/), and the office presentation by Claw3D. The office is an original procedural Three.js scene: no Claw3D application code or assets are included. LICENSE and NOTICE preserve the Paseo, PandaOS and Mastra adaptations and the Three.js license.
 
@@ -13,12 +13,13 @@ The plugin-only repository is [marushan491/paseo-kitchen](https://github.com/mar
 Install dependencies, then install the cloned directory on the target host:
 
 ```sh
-cd /absolute/path/to/kitchen-plugin
+git clone https://github.com/marushan491/paseo-kitchen.git
+cd paseo-kitchen
 npm install --ignore-scripts
-paseo plugin install /absolute/path/to/kitchen-plugin
+paseo plugin install "$PWD"
 ```
 
-For PandaOS, use `pandaos plugin install` with the same directory. Enable plugins on that host. Open **Kitchen Studio → Settings → Kitchen settings** and configure:
+For PandaOS, use `pandaos plugin install` with the same directory. Enable plugins on that host. Open **Kitchen Studio** from the sidebar or command center. On hosts without a global plugin screen, open its workspace panel. Open **Settings → Connection & capacity**: choose the host connection once, then leave advanced fields collapsed. Configure:
 
 | Setting                   | Value                                                                                                                                                    |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -32,21 +33,77 @@ For PandaOS, use `pandaos plugin install` with the same directory. Enable plugin
 
 Reload the plugin after changing storage, host, CLI or pack settings. Concurrency updates apply immediately. Kitchen preflight checks the configured CLI before creating agents. Every CLI mutation compares the selected agent with the public SDK snapshot to prevent operation against the wrong daemon. There is no implicit production-host fallback.
 
-## Dashboard and Office
+## Start your first mission
+
+1. Choose a project in the Studio header and click **New mission**.
+2. Describe the goal and the observable results under **Done when**. The goal can span several features.
+3. Keep **Until the goal is done**. The Head Chef plans work and agents can request the next scoped tasks and dependencies as they discover what remains.
+4. Open **Agent model** only to change the selected provider/model. **Roles & workflow** explains the built-in roles and lets you add instructions and installed skill names for each role.
+5. Click **Start Kitchen**. Follow the mission, answer questions in Team chat and inspect its verification evidence when it becomes **Ready for human**.
+
+The default role chain is Head Chef → Developer → Reviewer → Verifier → Integrator → Final Verifier. You do not have to create profiles before starting. **Advanced options** contains execution classification, alternate packs, optional budgets and PR publication. Automatic execution uses the configured decision provider to choose Single or Team; it is separate from the host's model-selection setting.
+
+The built-in Team Kitchen has no implicit token, cost, duration, delegation-depth or additional-item caps. Single execution does not delegate; external packs can define their own structural limits. The default capacity is four concurrent Cooks; queued work continues as capacity becomes available. An explicit budget remains binding. A missing provider quota, human answer or required evidence can pause progress; Kitchen resumes through its persisted runtime rather than inventing a successful result. It stops when the stated goal has a verified result and waits for acceptance. It does not automatically approve, merge or deploy.
+
+## Screens and navigation
+
+Screenshots below show an installed plugin in PandaOS using an isolated demo project and example historical mission records. They document the interface, not a claim that the example agents are currently working. Web and desktop have the 3D Kitchen; native clients retain the selectable role list.
+
+| Screen                | What you do here                                                                                                                                                                    |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Overview**          | Find the next human action. **Needs you**, **Activity** and **Problems** share this page instead of duplicating navigation. Open a session, inspect its handoff or snooze an entry. |
+| **Kitchen**           | See actual role bindings at kitchen stations. Select a chef or role card to inspect its agent, open the mission or configure its next role agent.                                   |
+| **Missions**          | Start a goal, select a persisted run, answer questions in Team chat and inspect work items, dependencies and acceptance evidence.                                                   |
+| **Roles & workflows** | Read the standard responsibilities. Customize a role or save reusable instructions, ordered steps, skills and optional provider/model overrides.                                    |
+| **Settings**          | Set host connection and capacity once. Dashboard preferences, migration and automatic follow-up rules live in separate sections; technical fields are collapsible.                  |
+
+### Overview
+
+![Overview with project scope and next action](docs/screenshots/overview.png)
+
+The header's project scope also filters the Kitchen, missions, activity and schedules. Select **All projects** for a cross-project view. A session's Done/Reopen and snooze preferences belong to the dashboard; accepted mission state remains separate from merely finishing an agent turn.
+
+### Kitchen
+
+![Live Kitchen with role stations and selectable chefs](docs/screenshots/kitchen.png)
+
+Preparation boards, cooking stations, review plates and verification sinks correspond to real roles. Furniture remains visible in an empty Kitchen; chefs appear only for actual bindings. Selecting a station connects the visualization to the agent and mission controls below it.
+
+### Missions and starting work
+
+![Missions for the selected project](docs/screenshots/missions.png)
+
+![Goal-first mission form with expandable roles](docs/screenshots/mission-form.png)
+
+The persistent start button explains missing required input. Name, goal, acceptance criteria and project are the essentials. Roles inherit the chosen host settings and built-in pack instructions until you override them. Budgets and publication settings stay under **Advanced options**.
+
+### Roles and workflows
+
+![Built-in roles and reusable workflows](docs/screenshots/roles-workflows.png)
+
+Use **Customize** on a standard role to start from its actual instructions. Save a named profile, then assign it to a mission role. Extra role instructions and installed skills are also available without creating a profile. Naming a skill does not install it: the harness resolves its installed skill and must report a missing skill.
+
+### Settings
+
+![Connection and capacity with advanced settings collapsed](docs/screenshots/settings.png)
+
+Set concurrent Cooks to control simultaneous execution. Connection, storage and external-pack fields are disclosed when needed. Changing host or storage requires reloading the plugin; changing capacity applies immediately.
+
+## Dashboard and Kitchen
 
 Overview groups connected workspaces and agents and surfaces requests that need a human response. Activity shows workspace progress; Problems separates failed agents, failed checks and schedule errors. Open the affected agent, inspect its handoff, reply or mark the Dashboard session done. Snooze hides an inbox entry for one hour, until this evening or until tomorrow morning; it returns at its wake time. Snoozing does not stop the agent or resolve its request.
 
-Dashboard preferences use the plugin's own persistent store. **Settings → Overview settings** accepts an exported preference JSON to import existing snoozes without changing the original store. Existing workspace Done and handoff metadata is read from public snapshots. An accepted Kitchen contributes Done only when no linked work remains active. Dashboard Done/Reopen changes visibility in its own store; it does not archive agents or rewrite native workspace metadata.
+Dashboard preferences use the plugin's own persistent store. **Settings → Dashboard** accepts an exported preference JSON to import existing snoozes without changing the original store. Existing workspace Done and handoff metadata is read from public snapshots. An accepted Kitchen contributes Done only when no linked work remains active. Dashboard Done/Reopen changes visibility in its own store; it does not archive agents or rewrite native workspace metadata.
 
 Host schedule monitoring requires Overview's explicit daemon home and public CLI settings. Additional hosts use exact app server IDs mapped to explicit endpoints. Unknown or unreachable targets produce a visible error; the plugin does not substitute another host or forward the local password to a remote endpoint. Supported new-agent schedules have confirmed pause and run-once actions. Heartbeat controls remain with the owning agent and are unavailable here. Overview also lists Kitchen mission schedules and opens the corresponding mission. Host and Kitchen schedules retain their own execution stores.
 
-Office projects real mission bindings and public agent snapshots into role lanes. On web and desktop, an interactive 3D scene lets you select a desk, inspect the agent or open its mission. Native clients use the role list. When WebGL is unavailable, the role list remains available with the renderer's reason. Missing live agent data is marked unobserved; the scene does not invent activity or usage.
+Kitchen projects real mission bindings and public agent snapshots into cooking stations. On web and desktop, the interactive 3D scene lets you select a chef or station, inspect the agent or open its mission. Native clients use the role list. When WebGL is unavailable, the role list remains available with the renderer's reason. Missing live agent data is marked unobserved; the scene does not invent activity or usage.
 
 ## Run a Kitchen mission
 
 Open Kitchen Studio from the workspace Explorer, Sidebar or Command Center, then choose **New mission**. From an agent, choose **Hand off to Kitchen** to retain a source link and its provider/model/mode/thinking settings. You can also start from a project and explicitly select a provider and model.
 
-Enter a goal, optional specification and observable acceptance criteria. Choose Auto, Single or Team execution. Auto asks Jev AI System One for a typed decision from the goal, criteria, specification and bounded repository context; uncertain decisions require human input. Explicit Single/Team selection does not need Jev. Choose a fixed or self-organizing workflow and an optional feature/bug/maintenance classification. Duplicate submissions keep the same request identity; a reused identity with different content is rejected.
+Enter a goal, optional specification and observable acceptance criteria. Choose Auto, Single or Team execution. Auto asks Jev AI System One for a typed decision from the goal, criteria, specification and bounded repository context; uncertain decisions require human input. Explicit Single/Team selection does not need Jev. Keep goal-driven work or choose a fixed plan; optional feature/bug/maintenance classification and alternate packs are under Advanced options. Duplicate submissions keep the same request identity; a reused identity with different content is rejected.
 
 The Kitchen pack runs:
 
@@ -70,13 +127,13 @@ Pause stops new dispatch while current turns finish. Stop interrupts managed tur
 
 Built-in packs are `kitchen`, `kitchen-single`, `kitchen-insights`, `kitchen-gardener`, and `software-basic`. Insights/Gardener produce proposals from recorded events. **Settings → Improvements** can enable bounded rules that turn specified recurring events into maintenance missions. Rules are disabled by default; cooldowns, source-event deduplication, concurrent-run exclusion, maximum runs and bounded retries limit execution. Each generated mission uses the ordinary verification and approval pipeline.
 
-Self-organizing Kitchens accept bounded additional work requests from authorized active roles: at most two delegation levels and ten delegated items. Requests have stable identities, criteria and dependencies. Fixed Kitchens reject these requests.
+Goal-driven Team Kitchens accept scoped additional work requests from authorized active roles that the selected pack allows to delegate. Single execution has no delegation. Requests have stable identities, criteria and dependencies and enter the same dispatch queue and verification pipeline. Explicit delegation and additional-item budgets can bound them; fixed plans reject additional work requests.
 
 Schedules use the same Kitchen service and durable start identities. The UI supports cron, explicit time zones, run limits, expiry, pause/resume, manual kickoff, edits and deletion. Missing time zones mean UTC. A pending kickoff survives reload; lost success responses retry the same identity. Missed historical slots do not create a burst of backfilled jobs. Run history reports kickoff success or failure; delivery status belongs to the linked Kitchen.
 
 ## Workflow profiles and role assignments
 
-In **Workflows**, save named profiles with a provider, model, thinking setting, permission mode, instructions and ordered instruction steps. A workflow-only profile can omit the provider and inherit the chosen role's harness. Models must be advertised by the selected host; an unavailable model is rejected. Permission modes and thinking settings are passed to actual agent creation, rather than only displayed in the editor.
+In **Roles & workflows**, save named profiles with instructions, ordered steps and installed skill names. Provider, model, thinking and permission settings are optional overrides. A workflow-only profile can omit the provider and inherit the chosen role's harness. Models must be advertised by the selected host; an unavailable model is rejected. Permission modes and thinking settings are passed to actual agent creation, rather than only displayed in the editor.
 
 Assign profiles to the selected pack's roles when starting a mission. Repository defaults use `.agent-factory/project.json`:
 
@@ -112,7 +169,7 @@ The referenced profile must exist in this host's profile catalog. Omit `workflow
 
 Role settings start with the Head Chef's provider, model, mode and thinking. A project's role configuration, or the plugin's configured role default when the project has none, overrides that baseline. Mission role overrides take precedence; a workitem override takes precedence for its next new role agent. Unspecified fields inherit. Changing providers without selecting a model uses the new provider's advertised default.
 
-Resolved mission settings and each binding's executed profile are persisted as snapshots. Editing or deleting a catalog profile does not rewrite existing mission or agent configuration. From Office or a workitem, **Apply to next role agent** records a pending override. It takes effect only when that workitem gets a genuinely new binding: existing agents, nudges and reused agents on a return to the same phase keep their executed profile. Changes during an active start dispatch, or to closed work, are rejected.
+Resolved mission settings and each binding's executed profile are persisted as snapshots. Editing or deleting a catalog profile does not rewrite existing mission or agent configuration. From Kitchen or a workitem, **Apply to next role agent** records a pending override. It takes effect only when that workitem gets a genuinely new binding: existing agents, nudges and reused agents on a return to the same phase keep their executed profile. Changes during an active start dispatch, or to closed work, are rejected.
 
 Instructions and ordered steps enter the actual role prompt. They guide work within the selected pack's phase; they do not create extra engine phases, replace report schemas or bypass Review, verification or human acceptance. Worker instructions require no private company skills or PandaOS-specific MCP tools.
 
@@ -132,7 +189,7 @@ The manifest targets Paseo/PandaOS 0.9.1 through 0.11.x. Newer hosts provide eag
 
 The public plugin API cannot veto native agent/workspace archiving, globally hide Cook tabs, replace the native Boss chat renderer, or move an existing agent into another workspace. This plugin keeps jobs in its own accessible UI and reports unsupported moves explicitly. It does not claim native enforcement of those features.
 
-Time limits cover measured active binding time, with defaults of 60 minutes per role and four accumulated hours per run. Enforcement is periodic. Waiting for a known quota reset does not consume productive time; the plugin persists delayed retry and rejects an early manual retry. Provider-wide fallback, native hard kill and OS sandboxing remain host responsibilities.
+Optional time limits cover measured active binding time. There is no default role or total time cap; enforcement of an explicit limit is periodic. Waiting for a known quota reset does not consume productive time; the plugin persists delayed retry and rejects an early manual retry. Provider-wide fallback, native hard kill and OS sandboxing remain host responsibilities.
 
 Mission limits can bound Worker starts, plugin-dispatched chain steps, managed delegation depth and active time. They do not count every provider-internal tool call or prevent unrelated native spawns. Token and money limits require a trusted complete cumulative team ledger. A selected limit fails closed if the adapter cannot provide the required measurement; no estimated usage is substituted.
 

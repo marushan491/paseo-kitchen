@@ -1,8 +1,8 @@
 import { type PluginSurfaceProps, type SettingsState, useSettings } from "@getpaseo/plugin/client";
 import { useCallback, useState } from "react";
-import { ScrollView, Text } from "react-native";
+import { ScrollView, Text, View } from "react-native";
 import { factorySettings } from "../shared/preferences.js";
-import { Action, Field, useFactoryStyles } from "./ui.js";
+import { Action, Field, Disclosure, useFactoryStyles } from "./ui.js";
 
 export function FactorySettings(props: PluginSurfaceProps) {
   const state = useSettings(factorySettings);
@@ -54,57 +54,71 @@ function ReadySettings(
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Kitchen settings</Text>
       <Text style={styles.muted}>
-        After changing the data directory, daemon address or home, CLI executable or arguments, or
-        workflow pack directory, reload this plugin in the host’s plugin settings. Saving these
-        fields does not reconfigure an already running Kitchen service. The concurrency setting
-        applies immediately.
+        Capacity controls simultaneous agents on this host. It does not limit how much work a
+        mission can finish.
       </Text>
-      <Field theme={theme} label="Data directory" value={directory} onChange={setDirectory} />
-      <Text style={styles.muted}>
-        Leave empty when the host supplies an isolated plugin directory. On hosts without that API,
-        choose an absolute directory used only by this plugin. Restart the plugin after changing it.
-      </Text>
-      <Field
+      <View style={styles.card}>
+        <Text style={styles.heading}>Parallel capacity</Text>
+        <Field
+          theme={theme}
+          label="Concurrent Cooks · 1 to 4"
+          value={concurrency}
+          onChange={setConcurrency}
+        />
+        <Text style={styles.muted}>
+          Four is the host runtime maximum. Additional work stays in the queue.
+        </Text>
+      </View>
+      <Disclosure
         theme={theme}
-        label="Daemon WebSocket address for the public CLI bridge"
-        value={daemonHost}
-        onChange={setDaemonHost}
-      />
-      <Field
+        title="Host connection"
+        defaultOpen={!daemonHome && !daemonHost}
+        summary={daemonHome || daemonHost || "Set up the public host CLI before starting a mission"}
+      >
+        <Text style={styles.muted}>
+          Use the host daemon home or WebSocket address. Reload the plugin after changing connection
+          settings.
+        </Text>
+        <Field theme={theme} label="Daemon home" value={daemonHome} onChange={setDaemonHome} />
+        <Field
+          theme={theme}
+          label="Daemon WebSocket address · alternative"
+          value={daemonHost}
+          onChange={setDaemonHost}
+        />
+        <Field
+          theme={theme}
+          label="CLI executable"
+          value={cliExecutable}
+          onChange={setCliExecutable}
+        />
+        <Disclosure theme={theme} title="CLI launcher arguments" summary="Usually empty">
+          <Field
+            theme={theme}
+            label="CLI arguments · one argument per line"
+            value={cliArguments}
+            onChange={setCliArguments}
+            multiline
+          />
+        </Disclosure>
+      </Disclosure>
+      <Disclosure
         theme={theme}
-        label="Daemon home for the public CLI bridge"
-        value={daemonHome}
-        onChange={setDaemonHome}
-      />
-      <Text style={styles.muted}>
-        Set either this host’s explicit WebSocket address or its daemon home. Kitchen uses this
-        target for stopping Cooks. Leaving both empty disables CLI actions.
-      </Text>
-      <Field
-        theme={theme}
-        label="CLI executable"
-        value={cliExecutable}
-        onChange={setCliExecutable}
-      />
-      <Field
-        theme={theme}
-        label="CLI arguments · one argument per line"
-        value={cliArguments}
-        onChange={setCliArguments}
-        multiline
-      />
-      <Field
-        theme={theme}
-        label="Additional workflow pack directory"
-        value={packDirectory}
-        onChange={setPackDirectory}
-      />
-      <Field
-        theme={theme}
-        label="Maximum concurrent Cooks (1–4)"
-        value={concurrency}
-        onChange={setConcurrency}
-      />
+        title="Storage & external workflow packs"
+        summary="Use the host's plugin storage and built-in packs by default"
+      >
+        <Field theme={theme} label="Data directory" value={directory} onChange={setDirectory} />
+        <Text style={styles.muted}>
+          Leave empty if the host supplies isolated plugin storage. Otherwise use an absolute
+          directory outside your project. Reload after changing it.
+        </Text>
+        <Field
+          theme={theme}
+          label="Additional workflow pack directory"
+          value={packDirectory}
+          onChange={setPackDirectory}
+        />
+      </Disclosure>
       {!valid ? (
         <Text style={styles.danger}>
           Use a whole number from 1 to 4 and only one CLI target: daemon home or WebSocket address.

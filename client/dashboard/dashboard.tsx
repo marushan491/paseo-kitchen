@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { useSettings, type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { dashboardSettings } from "../../shared/dashboard/contracts.js";
@@ -10,13 +10,44 @@ import { Action, useDashboardStyles } from "./ui.js";
 import { partitionInbox } from "../../shared/dashboard/overview.js";
 
 export type DashboardProps = PluginSurfaceProps & {
+  projectPath?: string;
   section?: "overview" | "activity" | "problems";
   teamNavigation?: (teamId?: string) => void;
 };
 
 export function Dashboard(props: DashboardProps) {
   const styles = useDashboardStyles(props);
-  const state = useDashboard(props);
+  const allState = useDashboard(props);
+  const state = useMemo(() => {
+    const sessions = allState.sessions.filter(
+      (session) =>
+        !props.projectPath ||
+        (session.serverId === props.host.id && session.projectRootPath === props.projectPath),
+    );
+    const sessionKeys = new Set(sessions.map((session) => session.key));
+    const projectKeys = new Set(sessions.map((session) => session.projectViewKey));
+    const schedules = allState.schedules.filter(
+      (entry) => !props.projectPath || projectKeys.has(entry.projectViewKey || ""),
+    );
+    return {
+      ...allState,
+      sessions,
+      schedules,
+      inbox: {
+        ...allState.inbox,
+        items: allState.inbox.items.filter(
+          (item) =>
+            !props.projectPath ||
+            ("sessionKey" in item
+              ? sessionKeys.has(item.sessionKey)
+              : schedules.some(
+                  (entry) =>
+                    entry.serverId === item.serverId && entry.schedule.id === item.scheduleId,
+                )),
+        ),
+      },
+    };
+  }, [allState, props.projectPath, props.host.id]);
   const settings = useSettings(dashboardSettings);
   const refresh = useCallback(() => {
     void state.refresh();
@@ -38,7 +69,7 @@ export function Dashboard(props: DashboardProps) {
           {props.teamNavigation ? (
             <Action
               theme={props.theme}
-              title="Teams"
+              title="Open missions"
               value={undefined}
               onAction={props.teamNavigation}
               variant="secondary"
@@ -46,11 +77,21 @@ export function Dashboard(props: DashboardProps) {
           ) : null}
         </View>
         <Text style={styles.muted}>
-          {needsYou.length} needs you · {running} running · {problems.length} problems
+          {needsYou.length} need attention · {running} working · {problems.length} problems
         </Text>
       </View>
+      <Text style={styles.muted}>
+        {
+          {
+            overview:
+              "Answer questions and review handoffs. Kitchen keeps working when no decision is needed.",
+            activity: "Live workspaces and planned runs for your selected project scope.",
+            problems: "Failed runs and blocked checks, with links to the affected work.",
+          }[section]
+        }
+      </Text>
       {state.loading ? <Text style={styles.muted}>Loading agents and workspaces…</Text> : null}
-      {section === "overview" && state.snapshot ? (
+      {section === "overview" ? (
         <View style={styles.stack}>
           <Text style={styles.heading}>Needs you · {needsYou.length}</Text>
           {state.inbox.snoozedCount ? (
@@ -69,27 +110,36 @@ export function Dashboard(props: DashboardProps) {
       {section !== "activity" ? (
         <Problems {...props} state={state} always={section === "problems"} />
       ) : null}
-      {!state.snapshot ? (
+      {!state.snapshot && state.error ? (
         <Text style={styles.muted}>
-          Configure Overview settings to load persistent inbox preferences.
+          Dashboard preferences are unavailable. Open Settings → Dashboard to configure storage.
         </Text>
       ) : null}
-      {section !== "problems" && state.snapshot ? (
+      {section === "activity" && state.snapshot ? (
         <Board
           {...props}
           state={state}
           jiraSite={settings.status === "ready" ? settings.values.jiraSite : ""}
         />
       ) : null}
-      <KitchenScheduleOverview {...props} section={section} onOpenTeam={props.teamNavigation} />
-      {state.inventories
-        .filter((host) => !state.snapshot?.scheduleHostIds.includes(host.serverId))
-        .map((host) => (
-          <Text key={host.serverId} style={styles.muted}>
-            Schedule monitoring not configured for {host.label}. Add its explicit endpoint in
-            Overview settings.
-          </Text>
-        ))}
+      {section !== "overview" ? (
+        <KitchenScheduleOverview
+          {...props}
+          projectPath={props.projectPath}
+          section={section}
+          onOpenTeam={props.teamNavigation}
+        />
+      ) : null}
+      {section === "activity"
+        ? state.inventories
+            .filter((host) => !state.snapshot?.scheduleHostIds.includes(host.serverId))
+            .map((host) => (
+              <Text key={host.serverId} style={styles.muted}>
+                Schedule monitoring not configured for {host.label}. Add its explicit endpoint in
+                Overview settings.
+              </Text>
+            ))
+        : null}
     </ScrollView>
   );
 }

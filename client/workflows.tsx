@@ -3,6 +3,7 @@ import { type PluginSurfaceProps, usePaseo, useRpc } from "@getpaseo/plugin/clie
 import { useCallback, useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import {
+  factoryPacks,
   factoryProfilesList,
   factoryProfilesSave,
   factoryProfilesRemove,
@@ -11,9 +12,44 @@ import {
   type WorkflowProfile,
   type TeamState,
 } from "../shared/factory-contracts.js";
-import { Action, Field, useFactoryStyles } from "./ui.js";
+import { Action, Field, Disclosure, useFactoryStyles } from "./ui.js";
 import { Choice } from "./choice.js";
 import { resolveWorkflowSteps } from "./workflow-steps.js";
+
+const emptyProfile: RoleProfileOverride = {};
+const emptyRoles: Record<string, { title: string }> = {};
+const roleGuides: Record<string, { purpose: string; instructions: string }> = {
+  po: {
+    purpose: "Turns the goal into scoped tasks and dependencies.",
+    instructions:
+      "Read the project instructions. Keep each task tied to the goal and acceptance criteria. Ask when a product decision is missing.",
+  },
+  developer: {
+    purpose: "Builds a feature in an isolated worktree.",
+    instructions:
+      "Inspect the existing implementation before editing. Make verifiable changes, run affected checks and report evidence. Request missing scoped work when needed.",
+  },
+  reviewer: {
+    purpose: "Reviews changes and can correct the implementation.",
+    instructions:
+      "Review against the task's requirements. Correct concrete defects and record changes with evidence. Leave independent verification to the Verifier.",
+  },
+  verifier: {
+    purpose: "Independently checks the result and its evidence.",
+    instructions:
+      "Verify the actual checkout and acceptance criteria. Report failed checks explicitly. Do not claim a pass from another agent's summary.",
+  },
+  integrator: {
+    purpose: "Combines verified features and prepares the final result.",
+    instructions:
+      "Integrate only verified changes. Resolve conflicts, check the combined result and record the final commit for independent verification.",
+  },
+  tester: {
+    purpose: "Runs the task's checks and reports concrete failures.",
+    instructions:
+      "Run affected tests against the actual implementation and report reproducible results.",
+  },
+};
 
 function useProfiles() {
   const list = useRpc(factoryProfilesList);
@@ -32,10 +68,10 @@ export function RoleAssignments(
   const options = useMemo(() => profileChoices(profiles.data?.profiles), [profiles.data]);
   return (
     <View style={styles.stack}>
-      <Text style={styles.heading}>Role workflows</Text>
+      <Text style={styles.heading}>Your team</Text>
       <Text style={styles.muted}>
-        Inherit the source and project settings, or choose a saved workflow for each role. Each run
-        keeps its resolved settings.
+        The built-in role instructions work without setup. Project settings are inherited. Expand a
+        role to add instructions or installed skills.
       </Text>
       {profiles.error ? <Text style={styles.danger}>{String(profiles.error)}</Text> : null}
       {Object.entries(props.roles).map(([role, details]) => (
@@ -60,24 +96,80 @@ function RoleChoice(
 ) {
   const { role, value, onChange } = props;
   const choose = useCallback(
-    (id: string) => onChange({ ...value, [role]: id ? { workflowProfileId: id } : {} }),
+    (id: string) =>
+      onChange({ ...value, [role]: { ...value[role], workflowProfileId: id || undefined } }),
     [role, value, onChange],
   );
+  const profile = value[role] || emptyProfile;
+  const styles = useFactoryStyles(props);
+  const instructions = useCallback(
+    (text: string) =>
+      onChange({ ...value, [role]: { ...profile, instructions: text || undefined } }),
+    [value, role, profile, onChange],
+  );
+  const skills = useCallback(
+    (text: string) =>
+      onChange({
+        ...value,
+        [role]: {
+          ...profile,
+          skills: text
+            .split("\n")
+            .map((entry) => entry.trim())
+            .filter(Boolean),
+        },
+      }),
+    [value, role, profile, onChange],
+  );
   return (
-    <Choice
-      {...props}
-      label={props.title}
-      value={value[role]?.workflowProfileId || ""}
-      options={props.options}
-      allowEmpty
-      emptyTitle="Inherit source / project"
-      onChange={choose}
-    />
+    <Disclosure
+      theme={props.theme}
+      title={props.title}
+      summary={roleGuides[role]?.purpose || "Runs this workflow role."}
+    >
+      <Text style={styles.muted}>
+        Built-in instructions + project defaults
+        {profile.workflowProfileId ? " + selected workflow" : ""}
+      </Text>
+      <Choice
+        {...props}
+        label="Saved workflow"
+        value={profile.workflowProfileId || ""}
+        options={props.options}
+        allowEmpty
+        emptyTitle="Use built-in role + project defaults"
+        onChange={choose}
+      />
+      <Field
+        theme={props.theme}
+        label={`${props.title} · extra instructions`}
+        value={profile.instructions || ""}
+        onChange={instructions}
+        multiline
+        placeholder="Anything this role should do differently?"
+      />
+      <Field
+        theme={props.theme}
+        label={`${props.title} · installed skills, one per line`}
+        value={profile.skills?.join("\n") || ""}
+        onChange={skills}
+        multiline
+        placeholder="design-taste-frontend"
+      />
+      <Text style={styles.muted}>
+        Names refer to skills available in the agent harness. Missing skills must be reported by the
+        agent.
+      </Text>
+    </Disclosure>
   );
 }
 
-export function WorkflowProfiles(props: PluginSurfaceProps) {
+export function WorkflowProfiles(props: PluginSurfaceProps & { projectPath?: string }) {
   const profiles = useProfiles();
+  const packsRpc = useRpc(factoryPacks);
+  const packs = useQuery({ queryKey: ["factory", "packs"], queryFn: () => packsRpc({}) });
+  const roles =
+    packs.data?.packs.find((pack) => pack.id === "kitchen")?.workflow.roles || emptyRoles;
   const styles = useFactoryStyles(props);
   const [editing, setEditing] = useState<WorkflowProfile | null>(null);
   const [creating, setCreating] = useState(false);
@@ -118,13 +210,60 @@ export function WorkflowProfiles(props: PluginSurfaceProps) {
     [mutation],
   );
   const deleteProfile = useCallback((id: string) => deletion.mutate(id), [deletion]);
+  const customize = useCallback(
+    (role: string) => {
+      const title = roles[role]?.title || role;
+      setEditing({
+        id: `custom-${role}-${Date.now()}`,
+        name: `${title} workflow`,
+        profile: { instructions: roleGuides[role]?.instructions || "", steps: [] },
+      });
+      setCreating(false);
+    },
+    [roles],
+  );
   return (
     <View style={styles.stack}>
+      <Text style={styles.title}>Roles & workflows</Text>
+      <Text style={styles.text}>
+        Roles decide who does the work. A workflow adds your instructions, skills and model
+        preferences to a role.
+      </Text>
+      <Text style={styles.muted}>
+        The standard team works immediately. Create a custom workflow only where a role needs
+        different instructions.
+      </Text>
+      <View style={styles.card}>
+        <Text style={styles.heading}>Built-in Kitchen team</Text>
+        <Text style={styles.muted}>
+          Head Chef coordinates · Plan → Build → Review → Verify → Integrate → Final verification
+        </Text>
+        {packs.error ? <Text style={styles.danger}>{String(packs.error)}</Text> : null}
+        {Object.entries(roles).map(([role, details]) => (
+          <View key={role} style={styles.stack}>
+            <View style={styles.header}>
+              <View style={styles.roleInfo}>
+                <Text style={styles.heading}>{details.title}</Text>
+                <Text style={styles.muted}>
+                  {roleGuides[role]?.purpose || "Runs this workflow role."}
+                </Text>
+              </View>
+              <Action
+                theme={props.theme}
+                title={`+ Customize ${details.title}`}
+                value={role}
+                onAction={customize}
+                variant="secondary"
+              />
+            </View>
+          </View>
+        ))}
+      </View>
       <View style={styles.row}>
-        <Text style={styles.title}>Workflow library</Text>
+        <Text style={styles.heading}>Your saved workflows</Text>
         <Action
           theme={props.theme}
-          title="New workflow"
+          title="+ New workflow"
           variant="primary"
           value="new"
           onAction={create}
@@ -140,7 +279,7 @@ export function WorkflowProfiles(props: PluginSurfaceProps) {
       <LoadError {...props} label="Delete workflow" error={deletion.error} />
       {!profiles.isPending && profiles.data?.profiles.length === 0 ? (
         <Text style={styles.muted}>
-          No saved workflows yet. Runs can already inherit the source and project configuration.
+          No custom workflows yet. The built-in team is ready to use.
         </Text>
       ) : null}
       {profiles.data?.profiles.map((profile) => (
@@ -187,6 +326,7 @@ export function WorkflowProfiles(props: PluginSurfaceProps) {
           pending={mutation.isPending}
           onSave={persist}
           onCancel={cancel}
+          projectPath={props.projectPath}
         />
       ) : null}
     </View>
@@ -196,15 +336,18 @@ export function WorkflowProfiles(props: PluginSurfaceProps) {
 function WorkflowEditor(
   props: PluginSurfaceProps & {
     initial?: WorkflowProfile;
+    projectPath?: string;
     pending: boolean;
     onSave(profile: WorkflowProfile, cwd: string): void;
     onCancel(): void;
   },
 ) {
   const styles = useFactoryStyles(props);
-  const [name, setName] = useState(props.initial?.name || "");
-  const [cwd, setCwd] = useState("");
-  const [profile, setProfile] = useState<RoleProfileOverride>(props.initial?.profile || {});
+  const [name, setName] = useState(initialProfileName(props.initial));
+  const [cwd, setCwd] = useState(props.projectPath || "");
+  const [profile, setProfile] = useState<RoleProfileOverride>(
+    props.initial?.profile || emptyProfile,
+  );
   const initialSteps = props.initial?.profile.steps;
   const initialStepText = initialSteps?.map((step) => step.instructions).join("\n") || "";
   const [steps, setSteps] = useState(initialStepText);
@@ -216,6 +359,21 @@ function WorkflowEditor(
     },
     [initialStepText],
   );
+  const skillsChanged = useCallback(
+    (text: string) =>
+      setProfile((current) => ({
+        ...current,
+        skills: text
+          .split("\n")
+          .map((entry) => entry.trim())
+          .filter(Boolean),
+      })),
+    [],
+  );
+  const skillText = profile.skills?.join("\n") || "";
+  const runtimeSummary = profile.provider
+    ? `Override: ${profile.provider}`
+    : "Inherit mission provider and project defaults";
   const id =
     props.initial?.id ||
     name
@@ -246,7 +404,6 @@ function WorkflowEditor(
     <View style={styles.card}>
       <Text style={styles.heading}>{props.initial ? "Edit workflow" : "Create workflow"}</Text>
       <Field theme={props.theme} label="Workflow name" value={name} onChange={setName} />
-      <RuntimeProfile {...props} cwd={cwd} onCwd={setCwd} value={profile} onChange={setProfile} />
       <Field
         theme={props.theme}
         label="Role instructions"
@@ -267,6 +424,22 @@ function WorkflowEditor(
           step per nonempty line. Leave it unchanged to preserve the original steps.
         </Text>
       ) : null}
+      <Field
+        theme={props.theme}
+        label="Installed skills · one per line"
+        value={skillText}
+        onChange={skillsChanged}
+        multiline
+        placeholder="Names of skills available to this role's harness"
+      />
+      <Disclosure
+        theme={props.theme}
+        title="Project & model preferences"
+        defaultOpen={!cwd}
+        summary={runtimeSummary}
+      >
+        <RuntimeProfile {...props} cwd={cwd} onCwd={setCwd} value={profile} onChange={setProfile} />
+      </Disclosure>
       <Text style={styles.muted}>
         Steps are included in the real agent prompt in this order. Kitchen’s phase gates and
         acceptance evidence still apply.
@@ -471,6 +644,8 @@ export function WorkItemProfileSettings(
   const item = props.state.items[props.workItemId];
   const [role, setRole] = useState(props.initialRole || Object.keys(props.roles)[0] || "");
   const [workflow, setWorkflow] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [skills, setSkills] = useState("");
   const profiles = useProfiles();
   const configure = useRpc(factoryWorkConfigure);
   const cache = useQueryClient();
@@ -480,7 +655,14 @@ export function WorkItemProfileSettings(
         teamId: props.state.team.id,
         workItemId: props.workItemId,
         role,
-        profile: workflow ? { workflowProfileId: workflow } : {},
+        profile: {
+          workflowProfileId: workflow || undefined,
+          instructions: instructions || undefined,
+          skills: skills
+            .split("\n")
+            .map((entry) => entry.trim())
+            .filter(Boolean),
+        },
         actorId: "human",
       }),
     onSuccess: () => cache.invalidateQueries({ queryKey: ["factory"] }),
@@ -494,6 +676,8 @@ export function WorkItemProfileSettings(
     (value: string) => {
       setRole(value);
       setWorkflow("");
+      setInstructions("");
+      setSkills("");
       mutation.reset();
     },
     [mutation],
@@ -545,6 +729,20 @@ export function WorkItemProfileSettings(
         options={profileOptions}
         onChange={setWorkflow}
       />
+      <Field
+        theme={props.theme}
+        label="Extra role instructions"
+        value={instructions}
+        onChange={setInstructions}
+        multiline
+      />
+      <Field
+        theme={props.theme}
+        label="Installed role skills · one per line"
+        value={skills}
+        onChange={setSkills}
+        multiline
+      />
       <Text style={styles.muted}>
         Applies when Kitchen starts a new agent for this role. The current agent keeps its executing
         profile.
@@ -569,4 +767,8 @@ export function WorkItemProfileSettings(
       ) : null}
     </View>
   );
+}
+
+function initialProfileName(profile?: WorkflowProfile) {
+  return profile?.name || "";
 }

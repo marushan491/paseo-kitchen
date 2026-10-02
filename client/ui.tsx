@@ -1,5 +1,6 @@
 import type { PluginHostProps } from "@getpaseo/plugin/client";
-import { useCallback, useMemo, useId } from "react";
+import { useCallback, useMemo, useId, useState } from "react";
+import type { ReactNode } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 
 export function Action<T>({
@@ -33,16 +34,16 @@ export function Action<T>({
     if (variant === "primary") backgroundColor = theme.colors.accent;
     let color = theme.colors.foreground;
     if (variant === "danger") color = theme.colors.statusDanger;
-    if (variant === "primary") color = theme.colors.surface0;
+    if (variant === "primary") color = theme.colors.accentForeground;
     return {
       button: {
-        paddingVertical: 10,
+        paddingVertical: 8,
         paddingHorizontal: 14,
         borderRadius: 8,
         borderWidth: 1,
         borderColor,
         backgroundColor,
-        minHeight: 44,
+        minHeight: 40,
         opacity: disabled ? 0.45 : 1,
       },
       text: { color, fontWeight: "600" as const },
@@ -70,6 +71,7 @@ export function Field({
   onChange,
   multiline = false,
   secureTextEntry = false,
+  placeholder,
 }: {
   theme: PluginHostProps["theme"];
   label: string;
@@ -77,6 +79,7 @@ export function Field({
   onChange(value: string): void;
   multiline?: boolean;
   secureTextEntry?: boolean;
+  placeholder?: string;
 }) {
   const nativeId = useId();
   const styles = useMemo(
@@ -104,6 +107,7 @@ export function Field({
         onChangeText={onChange}
         multiline={multiline}
         secureTextEntry={secureTextEntry}
+        placeholder={placeholder}
         placeholderTextColor={theme.colors.foregroundMuted}
         style={styles.input}
       />
@@ -115,7 +119,39 @@ export function useFactoryStyles({ theme, layout }: Pick<PluginHostProps, "theme
   return useMemo(
     () => ({
       screen: { flex: 1, backgroundColor: theme.colors.surface0 },
-      content: { padding: layout.compact ? 16 : 24, gap: 20 },
+      content: {
+        padding: layout.compact ? 16 : 20,
+        gap: 20,
+        width: "100%" as const,
+        maxWidth: 1180,
+        alignSelf: "center" as const,
+      },
+      footer: {
+        padding: 16,
+        gap: 8,
+        borderTopWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface0,
+      },
+      projectPicker: { width: 240 },
+      header: {
+        flexDirection: "row" as const,
+        flexWrap: "wrap" as const,
+        gap: 8,
+        alignItems: "center" as const,
+        justifyContent: "space-between" as const,
+      },
+      scope: { minWidth: 230, maxWidth: 420, flex: 1 },
+      flush: {
+        padding: layout.compact ? 16 : 20,
+        paddingTop: 0,
+        paddingBottom: 0,
+        gap: 20,
+        maxWidth: 1180,
+        width: "100%" as const,
+        alignSelf: "center" as const,
+      },
+      roleInfo: { flex: 1, minWidth: 200 },
       row: {
         flexDirection: "row" as const,
         flexWrap: "wrap" as const,
@@ -147,10 +183,63 @@ export function useFactoryStyles({ theme, layout }: Pick<PluginHostProps, "theme
       },
       title: { color: theme.colors.foreground, fontSize: 24, fontWeight: "600" as const },
       heading: { color: theme.colors.foreground, fontSize: 17, fontWeight: "600" as const },
-      text: { color: theme.colors.foreground },
-      muted: { color: theme.colors.foregroundMuted },
+      text: { color: theme.colors.foreground, fontSize: 14, lineHeight: 21 },
+      muted: { color: theme.colors.foregroundMuted, fontSize: 13, lineHeight: 20 },
       danger: { color: theme.colors.statusDanger },
     }),
     [theme, layout.compact],
+  );
+}
+
+export function Disclosure({
+  theme,
+  title,
+  summary,
+  children,
+  defaultOpen = false,
+}: {
+  theme: PluginHostProps["theme"];
+  title: string;
+  summary?: string;
+  children: ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultOpen);
+  const toggle = useCallback(() => setExpanded((value) => !value), []);
+  const styles = useMemo(
+    () => ({
+      container: {
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        borderRadius: 10,
+        overflow: "hidden" as const,
+      },
+      toggle: { padding: 14, gap: 4, backgroundColor: theme.colors.surface1 },
+      row: { flexDirection: "row" as const, justifyContent: "space-between" as const, gap: 12 },
+      title: { color: theme.colors.foreground, fontWeight: "600" as const, flex: 1 },
+      glyph: { color: theme.colors.foregroundMuted, fontSize: 18 },
+      summary: { color: theme.colors.foregroundMuted, fontSize: 13, lineHeight: 20 },
+      body: { padding: 16, gap: 14 },
+    }),
+    [theme],
+  );
+  const accessibilityState = useMemo(() => ({ expanded }), [expanded]);
+  return (
+    <View style={styles.container}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={title}
+        accessibilityState={accessibilityState}
+        onPress={toggle}
+        style={styles.toggle}
+      >
+        <View style={styles.row}>
+          <Text style={styles.title}>{title}</Text>
+          <Text style={styles.glyph}>{expanded ? "−" : "+"}</Text>
+        </View>
+        {summary ? <Text style={styles.summary}>{summary}</Text> : null}
+      </Pressable>
+      {expanded ? <View style={styles.body}>{children}</View> : null}
+    </View>
   );
 }

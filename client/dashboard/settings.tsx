@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { normalizeDaemonHost } from "../../shared/dashboard/daemon-host.js";
 import { useCallback, useState } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { ScrollView, Text } from "react-native";
 import {
   useRpc,
   useSettings,
@@ -15,6 +15,7 @@ import {
   scheduleHostSchema,
 } from "../../shared/dashboard/contracts.js";
 import { normalizeJiraSite } from "../../shared/dashboard/jira.js";
+import { Disclosure } from "../ui.js";
 import { Action, Field, useDashboardStyles } from "./ui.js";
 
 export function DashboardSettings(props: PluginSurfaceProps) {
@@ -104,52 +105,69 @@ function ReadySettings(
   }, [importText, importPreferences]);
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Overview settings</Text>
-      <Field
-        theme={theme}
-        label="Separate plugin data directory (absolute path)"
-        value={directory}
-        onChange={setDirectory}
-      />
+      <Text style={styles.title}>Dashboard settings</Text>
       <Text style={styles.muted}>
-        New hosts supply a private plugin directory. Older hosts need this path or an explicit
-        daemon home. Changing the directory switches which Dashboard preferences are loaded.
+        Inbox and connected-host monitoring. Most installations can keep the current values.
       </Text>
-      <Field
+      <Disclosure
         theme={theme}
-        label="This host's daemon home (absolute path)"
-        value={home}
-        onChange={setHome}
-      />
-      <Text style={styles.muted}>
-        Schedule listing, run outcomes and controls use the public CLI with this explicit home.
-        Leave empty to keep schedule monitoring unavailable.
-      </Text>
-      <Field
+        title="Local host & preference storage"
+        summary="Connection for schedule monitoring and persistent snoozes"
+      >
+        <Field
+          theme={theme}
+          label="Separate plugin data directory (absolute path)"
+          value={directory}
+          onChange={setDirectory}
+        />
+        <Text style={styles.muted}>
+          New hosts supply a private plugin directory. Older hosts need this path or an explicit
+          daemon home. Changing the directory switches which Dashboard preferences are loaded.
+        </Text>
+        <Field
+          theme={theme}
+          label="This host's daemon home (absolute path)"
+          value={home}
+          onChange={setHome}
+        />
+        <Text style={styles.muted}>
+          Schedule listing, run outcomes and controls use the public CLI with this explicit home.
+          Leave empty to keep schedule monitoring unavailable.
+        </Text>
+        <Field
+          theme={theme}
+          label="Public CLI executable"
+          value={executable}
+          onChange={setExecutable}
+        />
+        <Field
+          theme={theme}
+          label="CLI prefix arguments (one per line)"
+          value={argumentsText}
+          onChange={setArguments}
+          multiline
+        />
+      </Disclosure>
+      <Disclosure
         theme={theme}
-        label="Public CLI executable"
-        value={executable}
-        onChange={setExecutable}
-      />
-      <Field
-        theme={theme}
-        label="CLI prefix arguments (one per line)"
-        value={argumentsText}
-        onChange={setArguments}
-        multiline
-      />
-      <Field
-        theme={theme}
-        label="Additional schedule hosts JSON [{serverId, daemonHost}]"
-        value={hostsText}
-        onChange={setHosts}
-        multiline
-      />
-      <Text style={styles.muted}>
-        Use exact app server IDs and explicit tcp:// or ws:// endpoints. Unknown hosts are never
-        guessed; endpoint credentials are not stored here.
-      </Text>
-      <Field theme={theme} label="Jira site" value={jira} onChange={setJira} />
+        title="Additional hosts"
+        summary="Optional explicit connections to other schedule hosts"
+      >
+        <Field
+          theme={theme}
+          label="Additional schedule hosts JSON [{serverId, daemonHost}]"
+          value={hostsText}
+          onChange={setHosts}
+          multiline
+        />
+        <Text style={styles.muted}>
+          Use exact app server IDs and explicit tcp:// or ws:// endpoints. Unknown hosts are never
+          guessed; endpoint credentials are not stored here.
+        </Text>
+      </Disclosure>
+      <Disclosure theme={theme} title="Issue links" summary="Optional Jira site for ticket links">
+        <Field theme={theme} label="Jira site" value={jira} onChange={setJira} />
+      </Disclosure>
       <Action
         theme={theme}
         title="Save Overview settings"
@@ -158,8 +176,11 @@ function ReadySettings(
         onAction={save}
         disabled={pending || !executable.trim() || Boolean(jira.trim() && !normalizeJiraSite(jira))}
       />
-      <View style={styles.stack}>
-        <Text style={styles.heading}>Import existing snoozes</Text>
+      <Disclosure
+        theme={theme}
+        title="Import existing snoozes"
+        summary="Optional migration of exported dashboard preferences"
+      >
         <Text style={styles.muted}>
           Paste an exported leitstand-preferences JSON object. This imports snoozes into this host’s
           plugin store without changing the old device store. Existing workspace Done metadata is
@@ -179,7 +200,7 @@ function ReadySettings(
           onAction={loadImport}
           disabled={pending || !importText.trim()}
         />
-      </View>
+      </Disclosure>
       <Text style={styles.muted}>
         Done/Reopen changes Dashboard status only. Native workspace Done marks, agents and scheduled
         jobs remain separate.

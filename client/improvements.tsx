@@ -8,7 +8,7 @@ import {
   factoryImprovementsSave,
   factoryImprovementsScan,
 } from "../shared/improvement-contracts.js";
-import { Action, Field, useFactoryStyles } from "./ui.js";
+import { Action, Field, Disclosure, useFactoryStyles } from "./ui.js";
 
 export function Improvements(props: PluginSurfaceProps) {
   const styles = useFactoryStyles(props),
@@ -53,7 +53,7 @@ export function Improvements(props: PluginSurfaceProps) {
   const edit = useCallback((value: string) => setDraft(value), []);
   return (
     <View style={styles.stack}>
-      <Text style={styles.heading}>Bounded improvement loop</Text>
+      <Text style={styles.heading}>Automatic follow-up work</Text>
       <Text style={styles.muted}>
         Enabled rules turn recorded Kitchen events into maintenance missions with a fixed scope,
         criteria, cooldown and run cap. They use the same review, verification and acceptance
@@ -85,35 +85,42 @@ export function Improvements(props: PluginSurfaceProps) {
           until you define an implementation rule.
         </Text>
       ) : null}
-      <Field
+      <Disclosure
         theme={props.theme}
-        label="Improvement rule JSON"
-        value={draft}
-        onChange={setDraft}
-        multiline
-      />
-      <Text style={styles.muted}>
-        Required: id, name, enabled, sourcePackIds, eventTypes, minOccurrences, cooldownMs, maxRuns
-        and target (a Kitchen mission with provider, repository, goal and acceptance criteria). Save
-        disabled to inspect the rule before enabling it.
-      </Text>
-      <View style={styles.row}>
-        <Action
+        title="Create or edit an improvement rule"
+        summary="Optional automation. No rules run until you explicitly enable them."
+        defaultOpen={Boolean(draft)}
+      >
+        <Field
           theme={props.theme}
-          title="Save improvement rule"
-          value="save"
-          onAction={saveRule}
-          disabled={busy || !draft.trim()}
-          variant="primary"
+          label="Improvement rule JSON"
+          value={draft}
+          onChange={setDraft}
+          multiline
         />
-        <Action
-          theme={props.theme}
-          title="Scan recorded events now"
-          value="scan"
-          onAction={scanNow}
-          disabled={busy}
-        />
-      </View>
+        <Text style={styles.muted}>
+          Required: id, name, enabled, sourcePackIds, eventTypes, minOccurrences, cooldownMs,
+          maxRuns and target (a Kitchen mission with provider, repository, goal and acceptance
+          criteria). Save disabled to inspect the rule before enabling it.
+        </Text>
+        <View style={styles.row}>
+          <Action
+            theme={props.theme}
+            title="Save improvement rule"
+            value="save"
+            onAction={saveRule}
+            disabled={busy || !draft.trim()}
+            variant="primary"
+          />
+          <Action
+            theme={props.theme}
+            title="Scan recorded events now"
+            value="scan"
+            onAction={scanNow}
+            disabled={busy}
+          />
+        </View>
+      </Disclosure>
       {error ? <Text style={styles.danger}>{error}</Text> : null}
       {query.data?.runs.map((run) => (
         <View key={run.id} style={styles.card}>

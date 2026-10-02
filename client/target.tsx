@@ -1,11 +1,11 @@
 import type { PaseoAgent } from "@getpaseo/client";
 import { useQuery } from "@tanstack/react-query";
 import { type PluginSurfaceProps, usePaseo } from "@getpaseo/plugin/client";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import { Choice } from "./choice.js";
 import type { StartKitchenInput } from "../shared/factory-contracts.js";
-import { useFactoryStyles } from "./ui.js";
+import { Disclosure, useFactoryStyles } from "./ui.js";
 
 type Target = Pick<
   StartKitchenInput,
@@ -45,6 +45,16 @@ export function useKitchenTarget(
     setProvider(value);
     setModel("");
   }, []);
+  useEffect(() => {
+    if (source || provider || !providers.data?.length) return;
+    const available = providers.data.filter((entry) => entry.available);
+    const preferred = available.find((entry) => entry.provider === "codex") || available[0];
+    if (preferred) chooseProvider(preferred.provider);
+  }, [source, provider, providers.data, chooseProvider]);
+  useEffect(() => {
+    if (!models.data?.length || models.data.some((entry) => entry.id === model)) return;
+    setModel((models.data.find((entry) => entry.isDefault) || models.data[0])!.id);
+  }, [models.data, model]);
   const validModel = models.data?.some((entry) => entry.id === model);
   const target = useMemo<Target>(
     () =>
@@ -119,7 +129,14 @@ export function TargetSelection(
         onChange={onProject}
       />
       {!hasSource ? (
-        <View style={styles.stack}>
+        <Disclosure
+          theme={props.theme}
+          title="Agent model"
+          summary={
+            [selection.provider, selection.model].filter(Boolean).join(" · ") ||
+            "Loading available defaults…"
+          }
+        >
           <Choice
             {...props}
             label="Provider"
@@ -141,7 +158,7 @@ export function TargetSelection(
           {!selection.target.cwd ? (
             <Text style={styles.muted}>Choose a project directory to load models.</Text>
           ) : null}
-        </View>
+        </Disclosure>
       ) : (
         <Text style={styles.muted}>
           Provider, model, mode and thinking follow the selected source session.
