@@ -241,6 +241,7 @@ export function registerFactory(server: PluginServerContext, options: FactoryOpt
     const factory = await ready(paseo);
     const caller = await factory.resolveCaller(event.agent.id);
     if (!caller) {
+      await factory.syncNativeHeadChefTitle(event.agent.id);
       const snapshot = await paseo.agents.ref(event.agent.id).refresh();
       if (
         snapshot?.agent.labels?.["agent-factory.team.boss"] === "true" &&

@@ -238,6 +238,7 @@ export const TeamSchema = z.object({
       stopped: z.boolean().optional(),
       scheduleId: z.string().optional(),
       kind: z.enum(["feature", "bug", "maintenance"]).optional(),
+      nativeConversation: z.boolean().optional(),
       sourceAgentId: z.string().optional(),
       acceptedAt: z.string().optional(),
       acceptedBy: z.string().optional(),
@@ -406,6 +407,7 @@ export const WorkRequestSchema = z.object({
 });
 export type WorkRequestInput = z.infer<typeof WorkRequestSchema>;
 export const StartKitchenSchema = z.object({
+  headChefAgentId: z.string().optional(),
   workflowId: z.string().optional(),
   title: z.string().min(1),
   objective: z.string().min(1),

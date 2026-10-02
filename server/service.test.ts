@@ -723,6 +723,14 @@ describe("Plugin recovery and controls", () => {
         candidateCommit: await workflowHead(developer.cwd),
         matches: changedFile.startsWith("auth/"),
       });
+      expect(item.pack.workflowConditions).toMatchObject({
+        "item:security-review": {
+          matches: changedFile.startsWith("auth/"),
+          skipped: !changedFile.startsWith("auth/"),
+          phaseEnteredAt: item.phaseHistory.findLast((entry) => entry.phase === "security-review")!
+            .enteredAt,
+        },
+      });
       if (changedFile.startsWith("auth/")) {
         expect(host.agentFor("security-reviewer")).toBeDefined();
         expect(item.phase).toBe("security-review");
@@ -1362,6 +1370,157 @@ describe("Kitchen runtime", () => {
   afterEach(async () => {
     await stopKitchenServices();
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("reuses a native HeadChef and deduplicates accepted followups without claiming human authority", async () => {
+    const host = kitchenFakeHost();
+    Object.assign(host.records.get("boss")!, {
+      cwd: root,
+      workspaceId: "native-workspace",
+      title: "Existing chat",
+    });
+    const service = new KitchenTestService({
+      ...host.options,
+      storageRoot: root,
+      resolveWorkspace: async () => ({ id: "native-workspace", cwd: root }),
+    });
+    const input = {
+      title: "Kitchen mission",
+      objective: "Implement the actual task",
+      cwd: root,
+      workspaceId: "native-workspace",
+      sourceAgentId: "boss",
+      headChefAgentId: "boss",
+      provider: "codex",
+      acceptanceCriteria: [{ id: "goal", text: "Task works" }],
+      idempotencyKey: "native-start",
+    };
+    const started = await service.startKitchen(input);
+    await service.dispatchAll();
+    expect(started.team.bossAgentId).toBe("boss");
+    expect(host.records.get("boss")!.title).toBe("Existing chat");
+    expect(host.created.every((agent) => agent.labels[TEAM_ROLE_LABEL])).toBe(true);
+    expect((await service.startKitchen(input)).team.id).toBe(started.team.id);
+    await service.registerNativeInitialMessage(started.team.id, "native:native-start");
+    await expect(service.registerNativeInitialMessage(started.team.id, "other")).rejects.toThrow(
+      /another delivery/,
+    );
+    await service.acceptUserMessage({
+      agentId: "boss",
+      eventId: "native:native-start",
+      text: input.objective,
+    });
+    const before = host.prompts.filter((prompt) => prompt.agentId === "boss").length;
+    const followup = {
+      agentId: "boss",
+      eventId: "followup-1",
+      text: "Also preserve existing data",
+      context: { attachments: [{ name: "spec.txt" }] },
+    };
+    await Promise.all([service.acceptUserMessage(followup), service.acceptUserMessage(followup)]);
+    const state = (await service.status(started.team.id)).state;
+    expect(state.team.objective.split(followup.text)).toHaveLength(2);
+    expect(state.items[state.team.rootItemId].objective).toContain(followup.text);
+    expect(host.prompts.filter((prompt) => prompt.agentId === "boss")).toHaveLength(before);
+    expect(
+      (await service.status(started.team.id)).events.filter(
+        (event) => event.type === "conversation.context" && event.data?.eventId === "followup-1",
+      ),
+    ).toMatchObject([{ actor: { type: "boss", id: "boss" } }]);
+    await expect(
+      service.acceptUserMessage({ ...followup, text: "Different text" }),
+    ).rejects.toThrow(/different content/);
+    expect(await service.acceptUserMessage({ ...followup, agentId: "foreign" })).toBe(false);
+    host.records.get("boss")!.title = "Actual task title";
+    await service.syncNativeHeadChefTitle("boss");
+    expect((await service.status(started.team.id)).state.team.title).toBe("Actual task title");
+    await service.report(host.agentFor("po").id, {
+      outcome: "planned",
+      summary: "Need the user's desired behavior",
+      needs: { kind: "human", category: "requirements", text: "What should this do?" },
+    });
+    expect((await service.status(started.team.id)).state.items[started.team.rootItemId].phase).toBe(
+      "blocked",
+    );
+    await service.acceptUserMessage({
+      agentId: "boss",
+      eventId: "unknown-answer",
+      text: "Answer without provenance",
+    });
+    expect((await service.status(started.team.id)).state.items[started.team.rootItemId].phase).toBe(
+      "blocked",
+    );
+    await service.acceptUserMessage({
+      agentId: "boss",
+      eventId: "client-answer",
+      text: "Preserve current behavior",
+      origin: { kind: "client", clientType: "app" },
+    });
+    expect(
+      (await service.status(started.team.id)).state.items[started.team.rootItemId].phase,
+    ).not.toBe("blocked");
+    await service.report(host.agentFor("po").id, {
+      outcome: "planned",
+      summary: "Need authorization",
+      needs: { kind: "human", category: "irreversible", text: "Publish?" },
+    });
+    await service.acceptUserMessage({
+      agentId: "boss",
+      eventId: "unsafe-answer",
+      text: "Yes",
+      origin: { kind: "client" },
+    });
+    expect((await service.status(started.team.id)).state.items[started.team.rootItemId].phase).toBe(
+      "blocked",
+    );
+    await service.shutdown();
+    const reloaded = new KitchenTestService({
+      ...host.options,
+      storageRoot: root,
+      resolveWorkspace: async () => ({ id: "native-workspace", cwd: root }),
+    });
+    await reloaded.registerNativeInitialMessage(started.team.id, "native:native-start");
+    await reloaded.acceptUserMessage(followup);
+    expect(
+      (await reloaded.status(started.team.id)).state.team.objective.split(followup.text),
+    ).toHaveLength(2);
+    await expect(
+      service.startKitchen({ ...input, idempotencyKey: "second", objective: "Another task" }),
+    ).rejects.toThrow(/another active mission/);
+  });
+
+  it("rejects native HeadChef workspace and provider mismatches and reports unavailable project presets", async () => {
+    const host = kitchenFakeHost();
+    Object.assign(host.records.get("boss")!, { cwd: root, workspaceId: "native-workspace" });
+    const service = makeKitchenService(root, host);
+    const input = {
+      title: "Native",
+      objective: "Task",
+      cwd: root,
+      workspaceId: "wrong",
+      headChefAgentId: "boss",
+      provider: "codex",
+      acceptanceCriteria: [{ id: "goal", text: "Works" }],
+      idempotencyKey: "invalid",
+    };
+    await expect(service.startKitchen(input)).rejects.toThrow(/workspace/);
+    await expect(
+      service.startKitchen({ ...input, workspaceId: "native-workspace", provider: "claude" }),
+    ).rejects.toThrow(/provider/);
+    expect(host.created).toHaveLength(0);
+    await mkdir(join(root, ".agent-factory"));
+    await writeFile(
+      join(root, ".agent-factory", "project.json"),
+      JSON.stringify({
+        workflowId: "missing",
+        headChef: { provider: "codex", model: "gpt-6.1-sol" },
+      }),
+    );
+    expect(await service.listProjectPacks(root)).toMatchObject({
+      defaultWorkflowId: "missing",
+      headChefProfile: { provider: "codex" },
+      unavailableReason: expect.any(String),
+    });
   });
 
   it("routes automatic Lead decisions into a real single pack and preserves the spec and classification across retries", async () => {

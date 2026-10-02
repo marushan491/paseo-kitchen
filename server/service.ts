@@ -682,6 +682,30 @@ export class TeamService {
     return (await this.store.get(teamId))!;
   }
 
+  async listProjectPacks(cwd: string) {
+    const profile = await readProjectProfile(cwd),
+      packs = this.listPacks(),
+      workflows = await this.workflows.list();
+    const defaultPackId = profile.workflowPack ?? "kitchen";
+    const selected = profile.workflowId
+      ? workflows.find((value) => value.id === profile.workflowId)
+      : undefined;
+    const defaultAvailable = profile.workflowId
+      ? Boolean(selected)
+      : Boolean(this.options.packs.get(defaultPackId));
+    return {
+      packs,
+      workflows,
+      defaultPackId: selected?.basePackId ?? defaultPackId,
+      defaultWorkflowId: profile.workflowId,
+      projectRoles: profile.roles,
+      headChefProfile: profile.headChef,
+      unavailableReason: defaultAvailable
+        ? undefined
+        : "This project's configured Kitchen team is unavailable",
+    };
+  }
+
   listPacks(): WorkflowPack[] {
     return this.options.packs.list();
   }
@@ -756,7 +780,7 @@ export class TeamService {
     const existingBoss = await this.findKitchenBoss(claim, fingerprint);
     const bossAgentId =
       existingBoss?.id ??
-      (await this.createKitchenBoss(params, cwd, claim, fingerprint, workspaceId));
+      (await this.reuseOrCreateKitchenBoss(params, cwd, claim, fingerprint, workspaceId));
     const requests: Record<string, string> = { [params.idempotencyKey]: fingerprint };
     const previousKey = existingBoss?.labels?.[`${KITCHEN_REQUEST_LABEL}.key`];
     if (previousKey)
@@ -784,6 +808,7 @@ export class TeamService {
         publication: params.publication,
         scheduleId: params.scheduleId,
         kind: params.kind ?? "feature",
+        nativeConversation: Boolean(params.headChefAgentId),
         sourceAgentId: params.sourceAgentId,
         requests,
       },
@@ -896,7 +921,8 @@ export class TeamService {
     const boss = await this.options.controller.get(team.bossAgentId);
     if (!boss) return;
     await this.repairKitchenWorkspace(team, boss);
-    if (boss.parentAgentId) await this.options.controller.detach(team.bossAgentId);
+    if (boss.parentAgentId && !team.kitchen.nativeConversation)
+      await this.options.controller.detach(team.bossAgentId);
     const labels: Record<string, string> = {
       ...boss.labels,
       [TEAM_LABEL]: team.id,
@@ -904,9 +930,13 @@ export class TeamService {
       "agent-factory.team.status": team.status,
     };
 
-    if (boss.title === team.title && JSON.stringify(labels) === JSON.stringify(boss.labels)) return;
+    if (
+      (team.kitchen.nativeConversation || boss.title === team.title) &&
+      JSON.stringify(labels) === JSON.stringify(boss.labels)
+    )
+      return;
     await this.options.controller.update(team.bossAgentId, {
-      title: team.title,
+      ...(team.kitchen.nativeConversation ? {} : { title: team.title }),
       labels,
     });
   }
@@ -926,6 +956,7 @@ export class TeamService {
   }
 
   private async validateKitchenSource(params: StartKitchenInput, cwd: string): Promise<void> {
+    if (params.headChefAgentId) await this.validateHeadChefReuse(params, cwd);
     if (!params.sourceAgentId) return;
     const source = await this.options.controller.get(params.sourceAgentId);
     if (!source) throw new Error("Source session not found");
@@ -1024,6 +1055,55 @@ export class TeamService {
     )
       throw new Error("Idempotency key already belongs to another Kitchen request");
     return existing;
+  }
+
+  private async validateHeadChefReuse(
+    params: StartKitchenInput,
+    cwd: string,
+  ): Promise<FactoryAgent> {
+    if (params.sourceAgentId && params.sourceAgentId !== params.headChefAgentId)
+      throw new Error("Native Head Chef must be the selected source session");
+    const agent = await this.options.controller.get(params.headChefAgentId!);
+    if (!agent || agent.archivedAt || agent.labels?.[TEAM_ROLE_LABEL])
+      throw new Error("Head Chef must be an available ordinary session, not a Cook");
+    if (
+      (await realpath(agent.cwd)) !== cwd ||
+      agent.provider !== params.provider.split("/")[0] ||
+      !params.workspaceId ||
+      agent.workspaceId !== params.workspaceId
+    )
+      throw new Error(
+        "Head Chef must match the selected workspace, project directory and provider",
+      );
+    for (const id of await this.store.listIds()) {
+      const state = await this.store.get(id);
+      if (state?.team.bossAgentId === agent.id && !["done", "canceled"].includes(state.team.status))
+        throw new Error("Head Chef already belongs to another active mission");
+    }
+    return agent;
+  }
+
+  private async reuseOrCreateKitchenBoss(
+    params: StartKitchenInput,
+    cwd: string,
+    claim: KitchenClaim,
+    fingerprint: string,
+    workspaceId?: string,
+  ): Promise<string> {
+    if (!params.headChefAgentId)
+      return this.createKitchenBoss(params, cwd, claim, fingerprint, workspaceId);
+    const agent = await this.validateHeadChefReuse(params, cwd);
+    await this.options.controller.update(agent.id, {
+      labels: {
+        ...agent.labels,
+        [KITCHEN_REQUEST_LABEL]: claim.requestId,
+        [`${KITCHEN_REQUEST_LABEL}.fingerprint`]: fingerprint,
+        [`${KITCHEN_REQUEST_LABEL}.claim`]: claim.claim,
+        [`${KITCHEN_REQUEST_LABEL}.key`]: params.idempotencyKey,
+        "agent-factory.team.boss": "true",
+      },
+    });
+    return agent.id;
   }
 
   private async createKitchenBoss(
@@ -1311,13 +1391,135 @@ export class TeamService {
     return out;
   }
 
-  async message(teamId: string, text: string, actor: Actor): Promise<void> {
+  async syncNativeHeadChefTitle(agentId: string): Promise<void> {
+    const agent = await this.options.controller.get(agentId);
+    if (!agent?.title?.trim() || agent.title === "New session") return;
+    for (const state of await this.listForBoss(agentId)) {
+      if (!state.team.kitchen?.nativeConversation || state.team.title === agent.title) continue;
+      await this.store.commit(state.team.id, (draft) => {
+        if (!draft.team.kitchen?.nativeConversation) return { events: [], result: null };
+        draft.team.title = agent.title!;
+        draft.items[draft.team.rootItemId].title = agent.title!;
+        return { events: [], result: null };
+      });
+    }
+  }
+
+  async registerNativeInitialMessage(teamId: string, eventId: string): Promise<void> {
+    if (!eventId.trim())
+      throw new Error("Native initial message requires a stable client message ID");
+    await this.store.commit(teamId, (draft) => {
+      assertMutableTeam(draft.team);
+      const root = draft.items[draft.team.rootItemId];
+      if (root.pack.nativeInitialMessageId && root.pack.nativeInitialMessageId !== eventId)
+        throw new Error("Native initial message already belongs to another delivery ID");
+      root.pack.nativeInitialMessageId = eventId;
+      return { events: [], result: null };
+    });
+  }
+
+  async acceptUserMessage(input: {
+    agentId: string;
+    eventId: string;
+    text: string;
+    context?: Record<string, unknown>;
+    origin?: { kind: "client" | "agent" | "plugin" | "system" | "unknown"; clientType?: string };
+  }): Promise<boolean> {
+    if (!input.eventId.trim()) throw new Error("Accepted user message requires a stable event ID");
+    const state = (await this.listForBoss(input.agentId)).find(
+      (value) =>
+        value.team.kitchen?.nativeConversation && !["done", "canceled"].includes(value.team.status),
+    );
+    if (!state) return false;
+    if (state.items[state.team.rootItemId].pack.nativeInitialMessageId === input.eventId)
+      return true;
+    await this.message(
+      state.team.id,
+      input.text,
+      { type: "boss", id: input.agentId },
+      {
+        alreadyDelivered: true,
+        eventId: input.eventId,
+        context: input.context,
+        clientConversation: input.origin?.kind === "client",
+      },
+    );
+    return true;
+  }
+
+  private recordMissionMessage(
+    draft: TeamState,
+    text: string,
+    actor: Actor,
+    options: { alreadyDelivered?: boolean; eventId?: string; context?: Record<string, unknown> },
+  ): boolean {
+    if (!options.eventId) return true;
+    const root = draft.items[draft.team.rootItemId];
+    const receipts = (root.pack.userMessageReceipts ??= {}) as Record<string, string>;
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify({ text, context: options.context }))
+      .digest("hex");
+    if (receipts[options.eventId]) {
+      if (receipts[options.eventId] !== fingerprint)
+        throw new Error("User message ID already belongs to different content");
+      return false;
+    }
+    receipts[options.eventId] = fingerprint;
+    if (options.alreadyDelivered) {
+      const message = `\n\n## Additional user context\n${text}${options.context ? `\nReferences: ${JSON.stringify(options.context)}` : ""}`;
+      draft.team.objective += message;
+      root.objective += message;
+    }
+    return true;
+  }
+
+  async message(
+    teamId: string,
+    text: string,
+    actor: Actor,
+    options: {
+      alreadyDelivered?: boolean;
+      clientConversation?: boolean;
+      eventId?: string;
+      context?: Record<string, unknown>;
+    } = {},
+  ): Promise<void> {
     const bossId = await this.store.commit(teamId, (draft) => {
       assertMutableTeam(draft.team);
       if (["done", "canceled"].includes(draft.team.status)) throw new Error("This team is closed");
-      const events: TeamEventDraft[] = [{ type: "human.message", actor, text }];
+      if (!this.recordMissionMessage(draft, text, actor, options))
+        return { events: [], result: null };
+      const events: TeamEventDraft[] = [
+        {
+          type: options.alreadyDelivered ? "conversation.context" : "human.message",
+          actor,
+          text,
+          data: options.eventId
+            ? { eventId: options.eventId, context: options.context }
+            : undefined,
+        },
+      ];
+      const nativeQuestions = Object.values(draft.items).filter((item) => {
+        const question = item.pack.nativeHumanQuestion as
+          | { revision?: number; category?: string }
+          | undefined;
+        return (
+          item.phase === "blocked" &&
+          question?.revision === item.revision &&
+          ["clarification", "architecture", "requirements"].includes(question.category ?? "")
+        );
+      });
       for (const item of Object.values(draft.items)) {
         if (item.phase === "blocked") {
+          if (
+            options.alreadyDelivered &&
+            (!options.clientConversation ||
+              nativeQuestions.length !== 1 ||
+              nativeQuestions[0]?.id !== item.id)
+          )
+            continue;
+          delete item.pack.nativeHumanQuestion;
+          delete item.pack.questionCategory;
           delete item.pack.headChefQuestion;
           item.reports.push({ role: "boss", phase: "blocked", outcome: "answer", summary: text });
           item.returns = 0;
@@ -1348,7 +1550,8 @@ export class TeamService {
       }
       return { events, result: draft.team.bossAgentId };
     });
-    if (actor.type === "human") await this.options.controller.send(bossId, text, "steer");
+    if (bossId && actor.type === "human" && !options.alreadyDelivered)
+      await this.options.controller.send(bossId, text, "steer");
     void this.dispatchAll();
   }
 
@@ -1504,6 +1707,14 @@ export class TeamService {
         }
         chargeBinding(draft, binding, this.now().getTime());
         const item = applyReport(draft, this.pack(draft.team), binding, payload, events);
+        if (payload.needs && item.phase === "blocked") {
+          item.pack.questionCategory = payload.needs.category ?? "clarification";
+          if (payload.needs.kind === "human")
+            item.pack.nativeHumanQuestion = {
+              revision: item.revision,
+              category: payload.needs.category ?? "clarification",
+            };
+        }
         return {
           events,
           result: `Report accepted. ${item.title} is now in ${item.phase}. Stop here.`,
@@ -2092,7 +2303,13 @@ export class TeamService {
           const target = draft.items[item.id];
           if (!target || target.revision !== item.revision || draft.team.status !== "active")
             return { events: [], result: true };
+          const phaseEnteredAt = target.phaseHistory.findLast(
+            (entry) => entry.phase === target.phase && !entry.exitedAt,
+          )?.enteredAt;
+          const receipt = { ...observed, skipped: !observed.matches, phaseEnteredAt };
           target.pack.workflowCondition = observed;
+          const receipts = (target.pack.workflowConditions ??= {}) as Record<string, unknown>;
+          receipts[`${target.board}:${target.phase}`] = receipt;
           const events: TeamEventDraft[] = [
             {
               type: "workflow.condition-observed",
@@ -2101,7 +2318,7 @@ export class TeamService {
               text: observed.matches
                 ? "Changed files require the configured check"
                 : "Observed changed files do not match the configured check",
-              data: observed,
+              data: { ...receipt, board: target.board, phase: target.phase },
             },
           ];
           if (!observed.matches)
@@ -2984,6 +3201,8 @@ async function currentBranch(cwd: string): Promise<string | undefined> {
 const ProjectProfileSchema = z
   .object({
     workflowPack: z.string().min(1).optional(),
+    workflowId: z.string().min(1).optional(),
+    headChef: RoleProfileOverrideSchema.optional(),
     roles: z.record(z.string(), RoleProfileOverrideSchema).optional(),
   })
   .passthrough();
@@ -3045,6 +3264,7 @@ function requestFingerprint(input: StartKitchenInput): string {
         thinking: input.thinking,
         packId: input.packId,
         workflowId: input.workflowId,
+        headChefAgentId: input.headChefAgentId,
         acceptanceCriteria: input.acceptanceCriteria,
         workflowMode: input.workflowMode ?? "fixed",
         missionMode: input.missionMode,
