@@ -27,6 +27,7 @@ import { Choice } from "./choice.js";
 import { PolicyFields, parsePolicyDraft, type PolicyDraft } from "./policy.js";
 import { PublicationFields, initialPublication, parsePublication } from "./publication.js";
 import { TeamView } from "./team-view.js";
+import { readKitchenSuggestion } from "../shared/kitchen-suggestion.js";
 
 const formStyle = { flex: 1, maxWidth: 820, gap: 16 };
 const emptyRoles = {};
@@ -85,6 +86,37 @@ export function Factory(props: Props) {
   const [criteria, setCriteria] = useState("");
   const [cwd, setCwd] = useState(props.projectPath || "");
   const [source, setSource] = useState(agentId || "");
+  useEffect(() => {
+    if (!agentId || !workspaceId || !props.createNew) return;
+    let disposed = false;
+    void (async () => {
+      const handle = paseo.agents.ref(agentId);
+      const [result, page] = await Promise.all([
+        handle.refresh(),
+        handle.timeline.refetch({ limit: 100, direction: "tail" }),
+      ]);
+      const agent = result?.agent;
+      const suggestion = readKitchenSuggestion(
+        page.entries.map((entry) => entry.item),
+        agentId,
+      );
+      if (
+        disposed ||
+        !suggestion ||
+        suggestion.workspaceId !== workspaceId ||
+        agent?.workspaceId !== workspaceId ||
+        agent.cwd !== suggestion.cwd
+      )
+        return;
+      setTitle((value) => value || suggestion.title);
+      setObjective((value) => value || suggestion.objective);
+      setCwd((value) => value || suggestion.cwd);
+      setSource((value) => value || suggestion.sourceAgentId);
+    })().catch(() => {});
+    return () => {
+      disposed = true;
+    };
+  }, [agentId, workspaceId, props.createNew, paseo]);
   const [kind, setKind] = useState<"feature" | "bug" | "maintenance">("feature");
   const [workflowMode, setWorkflowMode] = useState<"fixed" | "self-organizing">("self-organizing");
   const [publicationDraft, setPublicationDraft] = useState(initialPublication);

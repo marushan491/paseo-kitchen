@@ -13,6 +13,7 @@ import {
   hostSystemOneCredentials,
 } from "./server/system-one.js";
 import { loadKitchenRuntimeConfig, readOperatorCredential } from "./server/runtime-config.js";
+import { registerKitchenSuggestions } from "./server/kitchen-suggestion.js";
 
 export default function contribute(server: PluginServerContext) {
   const host = server as PluginServerContext & { paseo?: PaseoApi; dataDirectory?: string };
@@ -30,19 +31,21 @@ export default function contribute(server: PluginServerContext) {
   const removeSettings = settings.subscribe((state) => {
     if (state.status === "ready") concurrency = state.values.maxConcurrentAgents;
   });
+  const systemOneConfig = async () => {
+    const state = await settings.read();
+    if (state.status !== "ready") throw new Error(state.error);
+    return hostSystemOneConfig(state.values.daemonHome.trim() || undefined);
+  };
+  const decisionSource = new KitchenSystemOne({
+    config: systemOneConfig,
+    credentials: async () => {
+      const state = await settings.read();
+      if (state.status !== "ready") throw new Error(state.error);
+      return hostSystemOneCredentials(state.values.daemonHome.trim() || undefined);
+    },
+  });
   const factory = registerFactory(server, {
-    decisionSource: new KitchenSystemOne({
-      config: async () => {
-        const state = await settings.read();
-        if (state.status !== "ready") throw new Error(state.error);
-        return hostSystemOneConfig(state.values.daemonHome.trim() || undefined);
-      },
-      credentials: async () => {
-        const state = await settings.read();
-        if (state.status !== "ready") throw new Error(state.error);
-        return hostSystemOneCredentials(state.values.daemonHome.trim() || undefined);
-      },
-    }),
+    decisionSource,
     operatorCredential: async () =>
       process.env.KITCHEN_OPERATOR_CREDENTIAL || readOperatorCredential(await storageDirectory()),
     runtimeConfig: loadKitchenRuntimeConfig,
@@ -97,6 +100,11 @@ export default function contribute(server: PluginServerContext) {
     storageRoot: storageDirectory,
     service: factory.getService,
   });
+  const removeSuggestions = registerKitchenSuggestions(server, {
+    config: systemOneConfig,
+    decisionSource,
+    service: factory.getService,
+  });
   let disposed = false;
   let legacyClient: PaseoClient | undefined;
   const startup = (async () => {
@@ -128,6 +136,7 @@ export default function contribute(server: PluginServerContext) {
   });
   return async () => {
     disposed = true;
+    removeSuggestions();
     removeSettings();
     await removeDashboard();
     await improvements.cleanup();
