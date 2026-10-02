@@ -42,7 +42,15 @@ export async function readDirectory(api: PaseoApi, agentIds: readonly string[]) 
   const agents: PaseoAgent[] = [];
   for (let offset = 0; offset < agentIds.length; offset += 8) {
     const results = await Promise.all(
-      agentIds.slice(offset, offset + 8).map((id) => api.agents.ref(id).refresh()),
+      agentIds.slice(offset, offset + 8).map((id) =>
+        api.agents
+          .ref(id)
+          .refresh()
+          .catch((error: unknown) => {
+            if (error instanceof Error && error.message === `Agent not found: ${id}`) return null;
+            throw error;
+          }),
+      ),
     );
     agents.push(...results.flatMap((entry) => (entry ? [entry.agent] : [])));
   }
