@@ -4,7 +4,7 @@ A portable Paseo plugin for turning a goal into verified software. Give your Hea
 
 A Head Chef coordinates remaining work, isolated developer worktrees, editable reviews, independent verification, combined integration and human acceptance. The plugin owns its persisted jobs, bindings, queue, evidence, runtime limits and Kitchen schedules. It uses public Paseo APIs and the public host CLI.
 
-The hierarchy is inspired by [Agent Crew](https://paseo.cafe/plugins/agent-crew/), and the office presentation by Claw3D. The office is an original procedural Three.js scene: no Claw3D application code or assets are included. LICENSE and NOTICE preserve the Paseo, PandaOS and Mastra adaptations and the Three.js license.
+The hierarchy is inspired by [Agent Crew](https://paseo.cafe/plugins/agent-crew/), and the visual presentation by [Claw3D](https://github.com/iamlukethedev/claw3d). The Kitchen is an original procedural Three.js scene: no Claw3D application code or assets are included. LICENSE and NOTICE preserve the Paseo, PandaOS and Mastra adaptations and the Three.js license.
 
 ## Install and configure
 
@@ -81,7 +81,9 @@ The persistent start button explains missing required input. Name, goal, accepta
 
 ![Built-in roles and reusable workflows](docs/screenshots/roles-workflows.png)
 
-Use **Customize** on a standard role to start from its actual instructions. Save a named profile, then assign it to a mission role. Extra role instructions and installed skills are also available without creating a profile. Naming a skill does not install it: the harness resolves its installed skill and must report a missing skill.
+Use **+ Role** or **Customize** on a standard role. Choose the executable step, give the role a name and describe its task, responsibility and expected outcome. Templates already contain the pack's real instructions. The handoff graph shows which outcome starts the next role, including returns for corrections and the wait for child results.
+
+Save the role, then assign it to that step under **Roles & workflow** when starting a mission. For example, a named Reviewer can own accessibility checks and hand back `pass` or `changes` with evidence. Saving a profile does not create an extra execution stage. Custom stages and connections belong to a workflow pack. Instructions, ordered steps, installed skills and model preferences remain available in expandable sections. Naming a skill does not install it; the harness must report a missing skill.
 
 ### Settings
 
@@ -91,11 +93,11 @@ Set concurrent Cooks to control simultaneous execution. Connection, storage and 
 
 ## Dashboard and Kitchen
 
-Overview groups connected workspaces and agents and surfaces requests that need a human response. Activity shows workspace progress; Problems separates failed agents, failed checks and schedule errors. Open the affected agent, inspect its handoff, reply or mark the Dashboard session done. Snooze hides an inbox entry for one hour, until this evening or until tomorrow morning; it returns at its wake time. Snoozing does not stop the agent or resolve its request.
+Overview belongs to this host's Kitchen missions. It reads only the Head Chef, source agents and persisted Cook bindings; unrelated chats are excluded even when they share a workspace. **Needs you** contains actual permissions, blocked providers, mission questions and final acceptance. An ordinary completed Cook turn does not ask the human to take over. The Studio project selector scopes missions and their requests.
 
-Dashboard preferences use the plugin's own persistent store. **Settings → Dashboard** accepts an exported preference JSON to import existing snoozes without changing the original store. Existing workspace Done and handoff metadata is read from public snapshots. An accepted Kitchen contributes Done only when no linked work remains active. Dashboard Done/Reopen changes visibility in its own store; it does not archive agents or rewrite native workspace metadata.
+Open a question to reply in mission chat; open a verified result to inspect its evidence before acceptance. Snooze temporarily hides a request and does not stop work or answer it. Dashboard preferences persist in the plugin's own store. **Settings → Dashboard** can import existing snoozes. Accepted missions contribute Done only when no linked work remains active. Dashboard Done/Reopen affects its own view without archiving agents or rewriting workspace metadata.
 
-Host schedule monitoring requires Overview's explicit daemon home and public CLI settings. Additional hosts use exact app server IDs mapped to explicit endpoints. Unknown or unreachable targets produce a visible error; the plugin does not substitute another host or forward the local password to a remote endpoint. Supported new-agent schedules have confirmed pause and run-once actions. Heartbeat controls remain with the owning agent and are unavailable here. Overview also lists Kitchen mission schedules and opens the corresponding mission. Host and Kitchen schedules retain their own execution stores.
+**Activity** shows linked Kitchen work; **Problems** shows its failures. Kitchen schedules retain their own persisted kickoff outcomes and links to missions. Studio does not poll or display unrelated host cron schedules; those remain in Paseo's Schedules screen.
 
 Kitchen projects real mission bindings and public agent snapshots into cooking stations. On web and desktop, the interactive 3D scene lets you select a chef or station, inspect the agent or open its mission. Native clients use the role list. When WebGL is unavailable, the role list remains available with the renderer's reason. Missing live agent data is marked unobserved; the scene does not invent activity or usage.
 
