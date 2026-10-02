@@ -13,12 +13,20 @@ import { Action, useFactoryStyles } from "./ui.js";
 import { kitchenStations, clampZoom } from "./kitchen-stations.js";
 import { KitchenInspector } from "./kitchen-inspector.js";
 import { NativeKitchenMap } from "./kitchen-native-map.js";
+import {
+  missionStages,
+  missionWorkflowFor,
+  type MissionPack,
+  type MissionStageStatus,
+} from "../shared/mission-stage.js";
+import { stageForRole } from "./kitchen-stations.js";
 
 export type OfficeProps = PluginSurfaceProps & {
   teams: TeamState[];
   onOpenTeam(teamId: string): void;
   onConfigureAgent?(agentId: string): void;
   onNewMission?(): void;
+  packs?: readonly MissionPack[];
 };
 export function Office(props: OfficeProps) {
   const styles = useFactoryStyles(props);
@@ -27,6 +35,13 @@ export function Office(props: OfficeProps) {
   const desks = useMemo(
     () => projectOffice(props.teams, observed.agents),
     [props.teams, observed.agents],
+  );
+  const stages = useMemo(
+    () =>
+      props.teams.flatMap((state) =>
+        missionStages(state, missionWorkflowFor(state, props.packs || []), observed.agents),
+      ),
+    [props.teams, props.packs, observed.agents],
   );
   const [selected, setSelected] = useState<string | null>(null);
   const [mode, setMode] = useState<"map" | "list">(props.layout.compact ? "list" : "map");
@@ -154,12 +169,6 @@ export function Office(props: OfficeProps) {
                   disabled={zoom >= 180}
                 />
                 <Action theme={props.theme} title="Fit" value="fit" onAction={fit} />
-                <Action
-                  theme={props.theme}
-                  title={props.layout.compact ? "Stages" : "List"}
-                  value="list"
-                  onAction={chooseMode}
-                />
               </View>
               {reason ? <Text style={styles.muted}>{reason}</Text> : null}
               <StationShortcuts
@@ -183,7 +192,13 @@ export function Office(props: OfficeProps) {
               ) : null}
             </>
           ) : (
-            <StageList {...props} desks={desks} selected={selected} onSelect={setSelected} />
+            <StageList
+              {...props}
+              desks={desks}
+              stages={stages}
+              selected={selected}
+              onSelect={setSelected}
+            />
           )}
         </View>
         <KitchenInspector
@@ -204,14 +219,23 @@ function KitchenStory(props: OfficeProps & { desks: OfficeDesk[] }) {
     (state) => state.team.status !== "done" && state.team.status !== "canceled",
   );
   const attention = props.desks.filter((desk) => desk.tone === "attention").length;
+  let title = "Ready to cook";
+  let description =
+    "Start with a goal. Kitchen plans, builds and verifies the work with your team.";
+  if (missions.length) {
+    title = "In the Kitchen";
+    description =
+      "Follow your agents from planning to a verified result. Select a station to inspect the work.";
+  }
+  if (attention) {
+    title = "Your team needs you";
+    description = "Open an agent to answer its question and keep the mission moving.";
+  }
   return (
     <View style={styles.header}>
       <View style={styles.roleInfo}>
-        <Text style={styles.title}>Ready to cook</Text>
-        <Text style={styles.muted}>
-          Give Kitchen an outcome. It plans the work, assigns the right agents and verifies the
-          result—then brings decisions back to you.
-        </Text>
+        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.muted}>{description}</Text>
       </View>
       {missions.length || props.desks.length ? (
         <View style={styles.row}>
@@ -237,6 +261,7 @@ function StageList(
     desks: OfficeDesk[];
     selected: string | null;
     onSelect(value: string): void;
+    stages?: ReturnType<typeof missionStages>;
   },
 ) {
   return (
@@ -273,6 +298,13 @@ function StageRow(
   const { station, onSelect } = props;
   const styles = useFactoryStyles(props);
   const workers = props.desks.filter((desk) => desk.stationId === station.id);
+  const saved =
+    props.stages
+      ?.filter(
+        (stage) => stageForRole(stage.role, stage.phase, stage.board === "root") === station.id,
+      )
+      .map((stage) => stage.status) || [];
+  const status = stageStatus(workers, saved);
   const select = useCallback(() => onSelect(`station:${station.id}`), [onSelect, station.id]);
   const rowStyle = useMemo(
     () => ({
@@ -293,7 +325,7 @@ function StageRow(
     <Pressable
       onPress={select}
       accessibilityRole="button"
-      accessibilityLabel={`Stage ${station.title}, ${stageStatus(workers)}`}
+      accessibilityLabel={`Stage ${station.title}, ${status}`}
       style={rowStyle}
     >
       <View style={styles.header}>
@@ -301,7 +333,7 @@ function StageRow(
           <Text style={styles.heading}>{station.title}</Text>
           <Text style={styles.muted}>{station.purpose}</Text>
         </View>
-        <Text style={styles.muted}>{stageStatus(workers)}</Text>
+        <Text style={styles.muted}>{status}</Text>
       </View>
       {workers.map((desk) => (
         <Text key={desk.id} style={styles.muted}>
@@ -311,9 +343,16 @@ function StageRow(
     </Pressable>
   );
 }
-function stageStatus(workers: OfficeDesk[]) {
+function stageStatus(workers: OfficeDesk[], saved: MissionStageStatus[]) {
   if (workers.some((desk) => desk.tone === "attention")) return "Needs you";
   if (workers.some((desk) => desk.tone === "active")) return "Working";
+  if (saved.includes("needs-you")) return "Needs you";
+  if (saved.includes("problem")) return "Blocked";
+  if (saved.includes("unobserved")) return "Activity unavailable";
+  if (saved.length && saved.every((value) => ["completed", "skipped"].includes(value)))
+    return saved.every((value) => value === "skipped") ? "Skipped" : "Completed";
+  if (saved.includes("queued")) return "Queued";
+  if (saved.length) return "Waiting";
   return workers.length ? "Waiting" : "No agent assigned";
 }
 function useOfficeAgents(props: OfficeProps) {

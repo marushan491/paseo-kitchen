@@ -85,6 +85,16 @@ describe("Office authoritative projection", () => {
     });
   });
 
+  it("places actual specialist reviewers at Review instead of Head Chef", () => {
+    const state = kitchen();
+    state.bindings.worker.role = "security-reviewer";
+    state.bindings.worker.phase = "security";
+    expect(projectOffice([state])[1].stationId).toBe("review");
+    state.bindings.worker.role = "database-reviewer";
+    state.bindings.worker.phase = "database";
+    expect(projectOffice([state])[1].stationId).toBe("review");
+  });
+
   it("shows the executed profile rather than a later configured model", () => {
     const state = kitchen();
     state.bindings.worker.profile = "codex/executed-model";

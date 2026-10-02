@@ -82,7 +82,8 @@ export function KitchenInspector(props: InspectorProps) {
       ) : null}
     </View>
   );
-  if (!props.layout.compact) return <View style={inspectorStyle}>{body}</View>;
+  if (!props.layout.compact)
+    return props.selected ? <View style={inspectorStyle}>{body}</View> : null;
   return (
     <Modal
       visible={Boolean(props.selected)}

@@ -68,7 +68,7 @@ export const kitchenStations = [
 export type KitchenStationId = (typeof kitchenStations)[number]["id"];
 export function stageForRole(
   role: string,
-  _phase: string,
+  phase: string,
   finalVerification = false,
 ): KitchenStationId {
   const value = role.toLowerCase();
@@ -76,7 +76,12 @@ export function stageForRole(
   if (value === "po" || value === "planner" || value === "analyst" || value === "gardener")
     return "plan";
   if (value === "developer" || value === "implementer") return "build";
-  if (value === "reviewer") return "review";
+  if (
+    value === "reviewer" ||
+    value.endsWith("-reviewer") ||
+    ["security", "database"].includes(phase)
+  )
+    return "review";
   if (value === "verifier" || value === "tester") return finalVerification ? "final" : "verify";
   if (value === "integrator") return "integrate";
   return "head";
