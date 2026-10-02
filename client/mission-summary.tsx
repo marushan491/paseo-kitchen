@@ -35,6 +35,7 @@ export const missionStageLabels: Record<MissionStageStatus, string> = {
   queued: "Queued",
   working: "Working",
   completed: "Completed",
+  skipped: "Skipped · no matching changes",
   "needs-you": "Needs you",
   problem: "Blocked",
   unobserved: "Activity unavailable",

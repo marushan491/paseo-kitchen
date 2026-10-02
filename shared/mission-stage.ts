@@ -1,5 +1,5 @@
 import type { PaseoAgent } from "@getpaseo/client";
-import type { z } from "zod";
+import { z } from "zod";
 import type {
   Binding,
   FactoryPackSchema,
@@ -30,6 +30,7 @@ export type MissionStageStatus =
   | "queued"
   | "working"
   | "completed"
+  | "skipped"
   | "needs-you"
   | "problem"
   | "unobserved";
@@ -43,6 +44,7 @@ export interface MissionStage {
   itemIds: string[];
   agentIds: string[];
   completedCount: number;
+  skippedCount: number;
   totalCount: number;
   since?: string;
 }
@@ -82,7 +84,7 @@ function workflowStages(
   packId: string,
 ): Omit<
   MissionStage,
-  "status" | "itemIds" | "agentIds" | "completedCount" | "totalCount" | "since"
+  "status" | "itemIds" | "agentIds" | "completedCount" | "skippedCount" | "totalCount" | "since"
 >[] {
   const stages: ReturnType<typeof workflowStages> = [];
   const visited = new Set<string>();
@@ -136,6 +138,24 @@ function nextWorkingPhase(
     current = phase.next ?? phase.completeWithChildren;
   }
   return null;
+}
+
+const SkippedConditionSchema = z.object({
+  matches: z.literal(false),
+  skipped: z.literal(true),
+  phaseEnteredAt: z.string(),
+});
+
+function stageSkipped(item: WorkItem, stage: Pick<MissionStage, "id" | "phase">): boolean {
+  const receipts = item.pack.workflowConditions;
+  if (!receipts || typeof receipts !== "object" || Array.isArray(receipts)) return false;
+  const receipt = SkippedConditionSchema.safeParse(Reflect.get(receipts, stage.id));
+  const entry = item.phaseHistory.findLast((step) => step.phase === stage.phase);
+  return (
+    receipt.success &&
+    item.phase !== stage.phase &&
+    receipt.data.phaseEnteredAt === entry?.enteredAt
+  );
 }
 
 function stageCompleted(
@@ -208,7 +228,8 @@ function stageStatus(
   )
     return "needs-you";
   if (bindings.some((binding) => !agents[binding.agentId])) return "unobserved";
-  if (stage.totalCount > 0 && stage.completedCount === stage.totalCount) return "completed";
+  if (stage.totalCount > 0 && stage.completedCount + stage.skippedCount === stage.totalCount)
+    return stage.completedCount ? "completed" : "skipped";
   if (items.some((item) => item.phase === stage.phase)) return "queued";
   return "waiting";
 }
@@ -231,21 +252,26 @@ export function missionStages(
             .filter(
               (binding) =>
                 binding.phase === stage.phase &&
-                state.items[binding.workItemId]?.board === stage.board,
+                state.items[binding.workItemId]?.board === stage.board &&
+                !stageSkipped(state.items[binding.workItemId], stage),
             )
             .map((binding) => binding.agentId)
             .filter(Boolean),
         ),
       ],
       completedCount: 0,
+      skippedCount: 0,
       totalCount: 0,
     }),
   );
   for (const stage of stages) {
     stage.totalCount = stage.itemIds.length;
-    stage.completedCount = stage.itemIds.filter((id) =>
-      stageCompleted(state.items[id], stage, workflow, stages),
+    stage.completedCount = stage.itemIds.filter(
+      (id) =>
+        !stageSkipped(state.items[id], stage) &&
+        stageCompleted(state.items[id], stage, workflow, stages),
     ).length;
+    stage.skippedCount = stage.itemIds.filter((id) => stageSkipped(state.items[id], stage)).length;
     const entries = stage.itemIds.flatMap((id) =>
       state.items[id].phaseHistory.filter((entry) => entry.phase === stage.phase),
     );

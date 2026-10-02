@@ -288,3 +288,90 @@ it("uses only the exact installed pack version when no mission snapshot exists",
     missionWorkflowFor(state, [{ ...installed[0], version: kitchenPack.version + 1 }]),
   ).toBeUndefined();
 });
+
+function conditionalStage() {
+  const { state } = fixture();
+  const workflow = definitionFromPack(kitchenPack, "conditional-team");
+  workflow.roles["security-reviewer"] = {
+    id: "security-reviewer",
+    title: "Security Reviewer",
+    instructions: "Check authentication",
+    skills: [],
+    canEdit: false,
+    workspace: "item-worktree",
+    tools: [],
+  };
+  workflow.boards.item.phases.review.outcomes!.approve = "security-review";
+  workflow.boards.item.phases["security-review"] = {
+    title: "Security Reviewer",
+    kind: "working",
+    role: "security-reviewer",
+    outcomes: { pass: "verify", findings: "implement" },
+    condition: { kind: "changed-files", any: [{ prefix: "auth/" }] },
+    skipTo: "verify",
+  };
+  state.team.workflowSnapshot = workflow;
+  const item = child(state);
+  enter(item, "implement");
+  enter(item, "review");
+  enter(item, "security-review");
+  const phaseEnteredAt = item.phaseHistory.at(-1)!.enteredAt;
+  item.pack.workflowConditions = {
+    "item:security-review": { matches: false, skipped: true, phaseEnteredAt },
+  };
+  enter(item, "verify");
+  return { state, item, workflow, phaseEnteredAt };
+}
+
+it("labels a persisted conditional skip instead of claiming a completed check", () => {
+  const { state, workflow } = conditionalStage();
+  const stage = missionStages(state, workflow).find((entry) => entry.phase === "security-review");
+  expect(stage).toMatchObject({
+    status: "skipped",
+    skippedCount: 1,
+    completedCount: 0,
+    agentIds: [],
+  });
+});
+
+it("invalidates a previous skip when the item enters that phase again", () => {
+  const { state, item, workflow } = conditionalStage();
+  enter(item, "implement");
+  enter(item, "review");
+  enter(item, "security-review");
+  const stage = missionStages(state, workflow).find((entry) => entry.phase === "security-review");
+  expect(stage).toMatchObject({ status: "queued", skippedCount: 0, completedCount: 0 });
+});
+
+it("keeps checked and skipped counts separate for a conditional stage", () => {
+  const { state, workflow } = conditionalStage();
+  const checked = child(state, "checked");
+  enter(checked, "implement");
+  enter(checked, "review");
+  enter(checked, "security-review");
+  checked.pack = { ...checked.pack, workflowConditions: {} };
+  enter(checked, "verify");
+  const stage = missionStages(state, workflow).find((entry) => entry.phase === "security-review");
+  expect(stage).toMatchObject({
+    status: "completed",
+    skippedCount: 1,
+    completedCount: 1,
+    totalCount: 2,
+  });
+});
+
+it("does not treat malformed or unconfirmed condition receipts as a skip", () => {
+  const { state, item, workflow, phaseEnteredAt } = conditionalStage();
+  item.pack.workflowConditions = {
+    "item:security-review": { matches: true, skipped: true, phaseEnteredAt },
+  };
+  expect(
+    missionStages(state, workflow).find((stage) => stage.phase === "security-review")?.skippedCount,
+  ).toBe(0);
+  item.pack.workflowConditions = {
+    "item:security-review": { matches: false, skipped: true, phaseEnteredAt: "previous entry" },
+  };
+  expect(
+    missionStages(state, workflow).find((stage) => stage.phase === "security-review")?.skippedCount,
+  ).toBe(0);
+});

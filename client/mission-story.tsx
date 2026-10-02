@@ -176,7 +176,8 @@ function StoryStage(
         </View>
         {stage.totalCount ? (
           <Text style={styles.muted}>
-            {stage.completedCount} / {stage.totalCount} tasks through this stage
+            {stage.completedCount} / {stage.totalCount} tasks completed
+            {stage.skippedCount ? ` · ${stage.skippedCount} skipped (no matching changes)` : ""}
           </Text>
         ) : null}
       </Pressable>
@@ -191,7 +192,11 @@ function StoryStage(
             <StageAgent key={binding.id} {...props} binding={binding} />
           ))}
           {!shown.length ? (
-            <Text style={styles.muted}>An agent will be assigned when this stage is ready.</Text>
+            <Text style={styles.muted}>
+              {stage.status === "skipped"
+                ? "No agent ran: no matching changed files."
+                : "An agent will be assigned when this stage is ready."}
+            </Text>
           ) : null}
           {props.workflow?.roles[stage.role]?.instructions ? (
             <Disclosure theme={props.theme} title="Role instructions">
