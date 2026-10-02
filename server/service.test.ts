@@ -16,7 +16,7 @@ import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/pro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pino from "pino";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PackRegistry } from "./pack.js";
 import { TeamService, type TeamServiceOptions } from "./service.js";
 import { TEAM_ROLE_LABEL, type TeamState } from "./types.js";
@@ -1487,6 +1487,79 @@ describe("Kitchen runtime", () => {
     await expect(
       service.startKitchen({ ...input, idempotencyKey: "second", objective: "Another task" }),
     ).rejects.toThrow(/another active mission/);
+  });
+
+  it("defers native dispatch across reload until the exact rich initial brief is accepted", async () => {
+    const host = kitchenFakeHost();
+    Object.assign(host.records.get("boss")!, { cwd: root, workspaceId: "native-workspace" });
+    const send = vi.fn(async () => {});
+    let clock = new Date("2026-10-03T12:00:00Z");
+    const options = {
+      ...host.options,
+      storageRoot: root,
+      resolveWorkspace: async () => ({ id: "native-workspace", cwd: root }),
+      controllerOverrides: { send },
+      maxConcurrentAgents: () => 1,
+      now: () => clock,
+    };
+    const service = new KitchenTestService(options);
+    const started = await service.startKitchen({
+      title: "Native",
+      objective: "Read the image brief",
+      cwd: root,
+      workspaceId: "native-workspace",
+      headChefAgentId: "boss",
+      provider: "codex",
+      acceptanceCriteria: [{ id: "goal", text: "Meets brief" }],
+      idempotencyKey: "deferred",
+      pendingInitialBrief: true,
+      initialBriefHasImages: true,
+    });
+    await service.registerNativeInitialMessage(started.team.id, "native:deferred");
+    await service.dispatchAll();
+    expect(host.created).toHaveLength(0);
+    await expect(service.releaseNativeInitialBrief(started.team.id, "wrong")).rejects.toThrow(
+      /does not match/,
+    );
+    await service.shutdown();
+    const reloaded = new KitchenTestService(options);
+    await reloaded.dispatchAll();
+    expect(host.created).toHaveLength(0);
+    await reloaded.acceptUserMessage({
+      agentId: "boss",
+      eventId: "native:deferred",
+      text: "Read image",
+    });
+    await reloaded.dispatchAll();
+    expect(host.agentFor("po")).toBeDefined();
+    expect(send).toHaveBeenCalledWith(host.agentFor("po").id, expect.any(String), undefined, {
+      nativeBrief: { agentId: "boss", messageId: "native:deferred", requireRich: true },
+    });
+    await reloaded.releaseNativeInitialBrief(started.team.id, "native:deferred");
+    await reloaded.dispatchAll();
+    expect(host.created).toHaveLength(1);
+    const beforeSteer = (await reloaded.status(started.team.id)).state;
+    const activeMs = Object.values(beforeSteer.bindings)[0]!.activeMs;
+    clock = new Date(clock.getTime() + 1_000);
+    send.mockClear();
+    await reloaded.acceptUserMessage({
+      agentId: "boss",
+      eventId: "native-image-followup",
+      text: "Use the attached revised design",
+      context: { attachments: [{ type: "image", mimeType: "image/png", index: 0 }] },
+      origin: { kind: "client" },
+    });
+    await reloaded.dispatchAll();
+    expect(send).toHaveBeenCalledWith(
+      host.agentFor("po").id,
+      expect.stringContaining("Use the attached revised design"),
+      "steer",
+      { nativeBrief: { agentId: "boss", messageId: "native-image-followup", requireRich: true } },
+    );
+    expect(host.created).toHaveLength(1);
+    expect(
+      Object.values((await reloaded.status(started.team.id)).state.bindings)[0]!.activeMs,
+    ).toBeGreaterThanOrEqual(activeMs + 1_000);
   });
 
   it("rejects native HeadChef workspace and provider mismatches and reports unavailable project presets", async () => {

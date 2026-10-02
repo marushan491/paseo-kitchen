@@ -460,7 +460,7 @@ export class TeamService {
       schedule(draft, pack, out);
       return { events: out, result: null };
     });
-    void this.dispatchAll();
+    if (!state.team.kitchen?.pendingInitialBrief) void this.dispatchAll();
     return (await this.store.get(state.team.id))!;
   }
 
@@ -809,6 +809,8 @@ export class TeamService {
         scheduleId: params.scheduleId,
         kind: params.kind ?? "feature",
         nativeConversation: Boolean(params.headChefAgentId),
+        pendingInitialBrief: params.pendingInitialBrief,
+        initialBriefHasImages: params.initialBriefHasImages,
         sourceAgentId: params.sourceAgentId,
         requests,
       },
@@ -1418,6 +1420,29 @@ export class TeamService {
     });
   }
 
+  async releaseNativeInitialBrief(teamId: string, eventId: string): Promise<void> {
+    await this.store.commit(teamId, (draft) => {
+      assertMutableTeam(draft.team);
+      const root = draft.items[draft.team.rootItemId];
+      if (!draft.team.kitchen?.nativeConversation || root.pack.nativeInitialMessageId !== eventId)
+        throw new Error("Initial native brief does not match this mission's registered message");
+      if (!draft.team.kitchen.pendingInitialBrief) return { events: [], result: null };
+      draft.team.kitchen.pendingInitialBrief = false;
+      return {
+        events: [
+          {
+            type: "conversation.initial-brief-accepted",
+            text: "Initial native brief accepted; Kitchen dispatch released",
+            actor: RUNTIME,
+            data: { messageId: eventId },
+          },
+        ],
+        result: null,
+      };
+    });
+    void this.dispatchAll();
+  }
+
   async acceptUserMessage(input: {
     agentId: string;
     eventId: string;
@@ -1431,8 +1456,10 @@ export class TeamService {
         value.team.kitchen?.nativeConversation && !["done", "canceled"].includes(value.team.status),
     );
     if (!state) return false;
-    if (state.items[state.team.rootItemId].pack.nativeInitialMessageId === input.eventId)
+    if (state.items[state.team.rootItemId].pack.nativeInitialMessageId === input.eventId) {
+      await this.releaseNativeInitialBrief(state.team.id, input.eventId);
       return true;
+    }
     await this.message(
       state.team.id,
       input.text,
@@ -1469,6 +1496,17 @@ export class TeamService {
       const message = `\n\n## Additional user context\n${text}${options.context ? `\nReferences: ${JSON.stringify(options.context)}` : ""}`;
       draft.team.objective += message;
       root.objective += message;
+      root.pack.nativeContextMessageId = options.eventId;
+      root.pack.nativeContextHasImages = Boolean(
+        Array.isArray(options.context?.attachments) &&
+        options.context.attachments.some(
+          (entry) =>
+            typeof entry === "object" &&
+            entry !== null &&
+            "type" in entry &&
+            entry.type === "image",
+        ),
+      );
     }
     return true;
   }
@@ -1532,27 +1570,42 @@ export class TeamService {
           }
           continue;
         }
-        const phase = boardOf(this.pack(draft.team), item).phases[item.phase];
-        const seat = phase?.role ? activeBinding(draft, item, phase.role) : null;
-        const waiting =
-          seat && (seat.turn === "idle" || (seat.turn === "reported" && seat.phase === item.phase));
-        if (seat && waiting) {
-          seat.turn = "starting";
-          seat.nudges = 0;
-          addDecision(
-            draft,
-            item,
-            "message-role",
-            { bindingId: seat.id, note: text },
-            `answer:${seat.id}:${draft.commit}`,
-          );
-        }
+        this.queueConversationResume(draft, item, text, options);
       }
       return { events, result: draft.team.bossAgentId };
     });
     if (bossId && actor.type === "human" && !options.alreadyDelivered)
       await this.options.controller.send(bossId, text, "steer");
     void this.dispatchAll();
+  }
+
+  private queueConversationResume(
+    draft: TeamState,
+    item: WorkItem,
+    text: string,
+    options: { alreadyDelivered?: boolean; eventId?: string },
+  ) {
+    const phase = boardOf(this.pack(draft.team), item).phases[item.phase];
+    const seat = phase?.role ? activeBinding(draft, item, phase.role) : null;
+    const waiting =
+      seat && (seat.turn === "idle" || (seat.turn === "reported" && seat.phase === item.phase));
+    if (seat && (waiting || (options.alreadyDelivered && seat.turn === "running"))) {
+      const steer = options.alreadyDelivered && seat.turn === "running";
+      seat.turn = "starting";
+      seat.nudges = 0;
+      addDecision(
+        draft,
+        item,
+        "message-role",
+        {
+          bindingId: seat.id,
+          note: text,
+          steer,
+          nativeBriefMessageId: options.alreadyDelivered ? options.eventId : undefined,
+        },
+        `answer:${seat.id}:${draft.commit}`,
+      );
+    }
   }
 
   async retryDecision(teamId: string, decisionId: string, actorId: string): Promise<void> {
@@ -2212,7 +2265,7 @@ export class TeamService {
     try {
       for (const teamId of await this.store.listIds()) {
         const state = await this.store.get(teamId);
-        if (!state) continue;
+        if (!state || state.team.kitchen?.pendingInitialBrief) continue;
         if (state.team.status === "active" || state.team.status === "paused")
           await this.syncKitchenBoss(state.team);
         if (await this.updateRuntime(teamId)) {
@@ -2342,8 +2395,10 @@ export class TeamService {
   private async runDecision(teamId: string, decisionId: string): Promise<void> {
     const state = await this.store.get(teamId);
     const decision = state?.decisions[decisionId];
+    if (state?.team.kitchen?.pendingInitialBrief) return;
     if (
-      (decision?.kind === "start-role" || decision?.kind === "message-role") &&
+      (decision?.kind === "start-role" ||
+        (decision?.kind === "message-role" && !decision.payload.steer)) &&
       (await this.activeCookCount()) >= this.capacity()
     )
       return;
@@ -2485,7 +2540,8 @@ export class TeamService {
       text = `The Paseo host restarted while you were working. Continue where you left off.\n\n${text}`;
     }
     const record = await this.validateRoleCheckout(state, pack, item, role, binding.agentId);
-    if (role.canEdit && record) await this.integrateDependencies(state, pack, item, record.cwd);
+    if (!decision.payload.steer && role.canEdit && record)
+      await this.integrateDependencies(state, pack, item, record.cwd);
     const allowed = await this.store.commit(state.team.id, (draft) => {
       const seat = draft.bindings[binding.id];
       if (
@@ -2495,13 +2551,20 @@ export class TeamService {
         draft.decisions[decision.id]?.status !== "leased"
       )
         return { events: [], result: false };
-      seat.activeStartedAt = this.now().toISOString();
+      if (!decision.payload.steer) seat.activeStartedAt = this.now().toISOString();
       return { events: [], result: true };
     });
     if (!allowed) return () => [];
-    await this.recordWorkflowBaseline(state, item, role, record!.cwd);
-    await this.protectVerifier(state, item, role, binding.agentId, record!.cwd);
-    await this.options.controller.send(binding.agentId, text);
+    if (!decision.payload.steer) {
+      await this.recordWorkflowBaseline(state, item, role, record!.cwd);
+      await this.protectVerifier(state, item, role, binding.agentId, record!.cwd);
+    }
+    await this.options.controller.send(
+      binding.agentId,
+      text,
+      decision.payload.steer ? "steer" : undefined,
+      this.nativeBrief(state, decision.payload.nativeBriefMessageId),
+    );
     return (draft) => {
       const b = draft.bindings[binding.id];
       if (b?.status === "active") {
@@ -2670,7 +2733,12 @@ export class TeamService {
         return () => [];
       await this.recordWorkflowBaseline(state, item, role, record!.cwd);
       await this.protectVerifier(state, item, role, agentId, record!.cwd);
-      await this.options.controller.send(agentId, await this.workPacket(state, pack, item, role));
+      await this.options.controller.send(
+        agentId,
+        await this.workPacket(state, pack, item, role),
+        undefined,
+        this.nativeBrief(state),
+      );
     }
     const finalAgentId = agentId;
     return (draft) => {
@@ -2768,6 +2836,26 @@ export class TeamService {
       return record.cwd;
     }
     return record?.cwd ?? state.team.cwd;
+  }
+
+  private nativeBrief(state: TeamState, messageId?: unknown) {
+    if (!state.team.kitchen?.nativeConversation) return undefined;
+    const root = state.items[state.team.rootItemId];
+    const id =
+      typeof messageId === "string"
+        ? messageId
+        : (root.pack.nativeContextMessageId ?? root.pack.nativeInitialMessageId);
+    if (typeof id !== "string") return undefined;
+    const initial = id === root.pack.nativeInitialMessageId;
+    return {
+      nativeBrief: {
+        agentId: state.team.bossAgentId,
+        messageId: id,
+        requireRich: initial
+          ? state.team.kitchen.initialBriefHasImages
+          : root.pack.nativeContextHasImages === true,
+      },
+    };
   }
 
   private async workPacket(
@@ -3265,6 +3353,8 @@ function requestFingerprint(input: StartKitchenInput): string {
         packId: input.packId,
         workflowId: input.workflowId,
         headChefAgentId: input.headChefAgentId,
+        pendingInitialBrief: input.pendingInitialBrief,
+        initialBriefHasImages: input.initialBriefHasImages,
         acceptanceCriteria: input.acceptanceCriteria,
         workflowMode: input.workflowMode ?? "fixed",
         missionMode: input.missionMode,
@@ -3283,6 +3373,8 @@ function requestFingerprint(input: StartKitchenInput): string {
 }
 
 function validateKitchenInput(params: StartKitchenInput): void {
+  if (params.pendingInitialBrief && !params.headChefAgentId)
+    throw new Error("Deferred initial brief requires an ordinary native Head Chef");
   if (
     params.missionMode &&
     params.workflowMode &&
@@ -3457,7 +3549,7 @@ function workflowExecutionMode(
     : "team";
 }
 
-function mergeWorkflowProfiles(
+export function mergeWorkflowProfiles(
   base: Record<string, RoleProfileOverride> | undefined,
   overrides: Record<string, RoleProfileOverride> | undefined,
 ): Record<string, RoleProfileOverride> {

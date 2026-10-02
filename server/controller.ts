@@ -1,5 +1,6 @@
 import { readAgentRoutingNotice, type AgentRoutingNotice } from "../shared/agent-routing.js";
-import type { z } from "zod";
+import { z } from "zod";
+import type { AgentPromptInput } from "@getpaseo/protocol/agent-types";
 import type { FactoryCompletionSchema } from "../shared/factory-contracts.js";
 import { parseFactoryCompletion } from "./completion.js";
 import { realpath } from "node:fs/promises";
@@ -42,13 +43,16 @@ export interface FactoryCreate {
   decisionId: string;
   worktree?: { worktreeName: string; branchName: string; baseBranch: string };
 }
+export interface FactorySendContext {
+  nativeBrief: { agentId: string; messageId: string; requireRich?: boolean };
+}
 export interface FactoryController {
   get(id: string): Promise<FactoryAgent | null>;
   completion?(id: string): Promise<z.infer<typeof FactoryCompletionSchema> | null>;
   list(): Promise<FactoryAgent[]>;
   isRunning(id: string): Promise<boolean>;
   create(input: FactoryCreate): Promise<{ id: string }>;
-  send(id: string, text: string, behavior?: "steer"): Promise<void>;
+  send(id: string, text: string, behavior?: "steer", context?: FactorySendContext): Promise<void>;
   cancel(id: string): Promise<void>;
   update(id: string, changes: { title?: string; labels?: Record<string, string> }): Promise<void>;
   detach(id: string): Promise<void>;
@@ -197,8 +201,80 @@ export function sdkController(
         : await paseo.agents.create(options);
       return { id: created.id };
     },
-    async send(id, text, behavior) {
-      await paseo.agents.ref(id).send(text, { activeTurnBehavior: behavior });
+    async send(id, text, behavior, context) {
+      const brief = context ? await nativeMessage(paseo, context.nativeBrief) : undefined;
+      const blocks = typeof brief === "string" ? [{ type: "text" as const, text: brief }] : brief;
+      const images = blocks
+        ?.filter((block) => block.type === "image")
+        .map(({ data, mimeType }) => ({ data, mimeType }));
+      const originalText = blocks
+        ?.filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("\n");
+      const packet =
+        originalText && !text.includes(originalText)
+          ? `${text}\n\n## Original native brief\n${originalText}`
+          : text;
+      await paseo.agents
+        .ref(id)
+        .send(packet, { activeTurnBehavior: behavior, ...(images?.length ? { images } : {}) });
     },
   };
+}
+
+const NativePromptSchema = z.union([
+  z.string(),
+  z.array(
+    z.discriminatedUnion("type", [
+      z.object({ type: z.literal("text"), text: z.string() }),
+      z.object({ type: z.literal("image"), data: z.string(), mimeType: z.string() }),
+    ]),
+  ),
+]);
+async function nativeMessage(
+  paseo: PaseoApi,
+  reference: FactorySendContext["nativeBrief"],
+): Promise<AgentPromptInput> {
+  let cursor: { epoch: string; seq: number } | undefined;
+  do {
+    const page = await paseo.agents.ref(reference.agentId).timeline.refetch({
+      direction: cursor ? "before" : "tail",
+      cursor,
+      limit: 200,
+      projection: "canonical",
+    });
+    if (page.error || page.staleCursor || page.gap)
+      throw new Error(page.error || "Native brief history is unavailable or incomplete");
+    for (const entry of page.entries) {
+      const item = entry.item;
+      if (
+        item.type !== "user_message" ||
+        (item.clientMessageId !== reference.messageId && item.messageId !== reference.messageId)
+      )
+        continue;
+      return parseNativePrompt(item, reference.requireRich);
+    }
+    if (!page.hasOlder || !page.startCursor) break;
+    if (cursor?.seq === page.startCursor.seq)
+      throw new Error("Native brief history cursor did not advance");
+    cursor = page.startCursor;
+  } while (cursor);
+  throw new Error("The registered native brief was not found in Head Chef's actual conversation");
+}
+
+function parseNativePrompt(
+  item: { text: string; prompt?: unknown },
+  requireRich?: boolean,
+): AgentPromptInput {
+  const parsed = NativePromptSchema.safeParse(item.prompt);
+  if (parsed.success) {
+    if (
+      requireRich &&
+      (typeof parsed.data === "string" || !parsed.data.some((block) => block.type === "image"))
+    )
+      throw new Error("The host did not preserve the native brief's original images");
+    return parsed.data;
+  }
+  if (requireRich) throw new Error("The host did not preserve the native brief's original images");
+  return item.text;
 }

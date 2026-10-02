@@ -364,3 +364,69 @@ console.log(JSON.stringify(args[1]==='inspect'?{Id:'worker',Provider:'codex',Cwd
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+it("forwards the exact native brief images from canonical host history after paging", async () => {
+  const refetch = vi
+    .fn()
+    .mockResolvedValueOnce({
+      entries: [],
+      hasOlder: true,
+      startCursor: { epoch: "history", seq: 20 },
+    })
+    .mockResolvedValueOnce({
+      entries: [
+        {
+          item: {
+            type: "user_message",
+            clientMessageId: "native:brief",
+            text: "Rendered reference",
+            prompt: [
+              { type: "text", text: "Actual attached brief text" },
+              { type: "image", data: "synthetic-pixels", mimeType: "image/png" },
+            ],
+          },
+        },
+      ],
+      hasOlder: false,
+    });
+  const send = vi.fn();
+  const api = {
+    agents: { ref: (id: string) => (id === "boss" ? { timeline: { refetch } } : { send }) },
+  } as unknown as PaseoApi;
+  await sdkController(api).send("po", "Plan this mission", undefined, {
+    nativeBrief: { agentId: "boss", messageId: "native:brief", requireRich: true },
+  });
+  expect(refetch.mock.calls[1]![0]).toMatchObject({
+    direction: "before",
+    projection: "canonical",
+    cursor: { epoch: "history", seq: 20 },
+  });
+  expect(send).toHaveBeenCalledWith(expect.stringContaining("Actual attached brief text"), {
+    activeTurnBehavior: undefined,
+    images: [{ data: "synthetic-pixels", mimeType: "image/png" }],
+  });
+});
+
+it("fails closed when a selected rich brief was not persisted or its history is incomplete", async () => {
+  const refetch = vi.fn().mockResolvedValue({
+    entries: [{ item: { type: "user_message", clientMessageId: "native:brief", text: "[image]" } }],
+    hasOlder: false,
+  });
+  const send = vi.fn();
+  const api = {
+    agents: { ref: (id: string) => (id === "boss" ? { timeline: { refetch } } : { send }) },
+  } as unknown as PaseoApi;
+  const controller = sdkController(api);
+  await expect(
+    controller.send("po", "Plan", undefined, {
+      nativeBrief: { agentId: "boss", messageId: "native:brief", requireRich: true },
+    }),
+  ).rejects.toThrow(/preserve.*images/);
+  refetch.mockResolvedValueOnce({ entries: [], hasOlder: false, gap: true });
+  await expect(
+    controller.send("po", "Plan", undefined, {
+      nativeBrief: { agentId: "boss", messageId: "native:brief" },
+    }),
+  ).rejects.toThrow(/incomplete/);
+  expect(send).not.toHaveBeenCalled();
+});
