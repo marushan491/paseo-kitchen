@@ -253,7 +253,9 @@ export function MissionList(
   const summaries = props.teams.map((state) =>
     missionSummary(
       state,
-      props.packs.find((pack) => pack.id === state.team.packId)?.workflow,
+      props.packs.find(
+        (pack) => pack.id === state.team.packId && pack.version === state.team.packVersion,
+      )?.workflow,
       props.agents,
     ),
   );
@@ -313,7 +315,12 @@ export function MissionList(
               {...props}
               state={state}
               selected={summary.teamId === props.selected}
-              workflow={props.packs.find((pack) => pack.id === state.team.packId)?.workflow}
+              workflow={
+                props.packs.find(
+                  (pack) =>
+                    pack.id === state.team.packId && pack.version === state.team.packVersion,
+                )?.workflow
+              }
             />
           );
         })

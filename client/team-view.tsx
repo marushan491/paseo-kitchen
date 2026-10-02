@@ -14,14 +14,20 @@ import {
   type WorkItem,
   type TeamEvent,
 } from "../shared/factory-contracts.js";
-import { Action, Field, useFactoryStyles } from "./ui.js";
+import { Action, Field, Disclosure, useFactoryStyles } from "./ui.js";
 import { WorkItemProfileSettings } from "./workflows.js";
 import { AgentTimeline } from "./timeline.js";
 import { acceptanceProblem, kitchenInsights } from "./kitchen-model.js";
+import {
+  MissionStory,
+  MissionEvidence,
+  MissionActivityView,
+  MissionReply,
+  useMissionAgents,
+} from "./mission-story.js";
 
 const emptyRoles = {};
-const views = ["Team chat", "Agents", "Mission"] as const;
-const jobViews = ["Overview", "Acceptance", "Insights", "Safety"] as const;
+const views = ["Stages", "Evidence", "Activity", "Team chat"] as const;
 type Control = "pause" | "resume" | "stop" | "cancel" | "accept";
 
 export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
@@ -38,8 +44,9 @@ export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
   );
   const retry = useRpc(factoryRetry);
   const cache = useQueryClient();
-  const [view, setView] = useState<(typeof views)[number]>("Mission");
-  const [jobView, setJobView] = useState<(typeof jobViews)[number]>("Overview");
+  const [view, setView] = useState<(typeof views)[number]>("Stages");
+  const replyView = useCallback(() => setView("Team chat"), []);
+  const evidenceView = useCallback(() => setView("Evidence"), []);
   const [credential, setCredential] = useState("");
   const [confirmation, setConfirmation] = useState<Control | null>(null);
   const team = useQuery({
@@ -48,6 +55,7 @@ export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
     refetchInterval: 4000,
     refetchIntervalInBackground: false,
   });
+  const live = useMissionAgents(team.data?.state);
   const change = useMutation({
     mutationFn: async (action: Control | { retry: string }) => {
       if (typeof action === "object")
@@ -94,10 +102,143 @@ export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
   const closed = state.team.status === "done" || state.team.status === "canceled";
   return (
     <View style={styles.stack}>
+      <MissionHeader
+        {...props}
+        state={state}
+        pending={change.isPending}
+        onControl={control}
+        onOpenAgent={openAgent}
+      />
+      {team.error || change.error ? (
+        <Text accessibilityLiveRegion="polite" style={styles.danger}>
+          {String(team.error || change.error)}
+        </Text>
+      ) : null}
+      {confirmation ? (
+        <KitchenControls
+          {...props}
+          state={state}
+          confirmation={confirmation}
+          pending={change.isPending}
+          onControl={control}
+          onConfirm={confirm}
+          onDismiss={dismiss}
+          credential={credential}
+          onCredential={setCredential}
+          onlyConfirmation
+        />
+      ) : null}
+      <View style={styles.row}>
+        {views.map((name) => (
+          <Action
+            key={name}
+            theme={theme}
+            title={name}
+            selected={name === view}
+            value={name}
+            onAction={setView}
+          />
+        ))}
+      </View>
+      {view === "Team chat" ? (
+        <View style={styles.stack}>
+          <MissionReply {...props} state={state} canSend={!closed} onSend={sendToBoss} />
+          <Disclosure theme={theme} title="Full Head Chef conversation">
+            <AgentTimeline
+              key={state.team.bossAgentId}
+              {...props}
+              agentId={state.team.bossAgentId}
+            />
+          </Disclosure>
+        </View>
+      ) : null}
+      {view === "Stages" ? (
+        <MissionStory
+          {...props}
+          state={state}
+          workflow={workflow}
+          agents={live.agents}
+          onReply={replyView}
+          onEvidence={evidenceView}
+        />
+      ) : null}
+      {view === "Evidence" ? (
+        <View style={styles.stack}>
+          <MissionEvidence {...props} state={state} />
+          <KitchenVerification
+            {...props}
+            state={state}
+            onControl={control}
+            pending={change.isPending}
+          />
+          <Publication {...props} state={state} />
+        </View>
+      ) : null}
+      {view === "Activity" ? (
+        <MissionActivityView {...props} state={state} workflow={workflow} events={events} />
+      ) : null}
+      {live.error ? (
+        <Text style={styles.muted}>Agent activity is unavailable: {String(live.error)}</Text>
+      ) : null}
+      <Disclosure
+        theme={theme}
+        title="Technical details"
+        summary="Runtime controls, task records, role settings and the complete event history"
+      >
+        <Text selectable style={styles.muted}>
+          {state.team.packId} / revision {state.commit} / {state.team.cwd}
+        </Text>
+        <KitchenControls
+          {...props}
+          state={state}
+          confirmation={null}
+          pending={change.isPending}
+          onControl={control}
+          onConfirm={confirm}
+          onDismiss={dismiss}
+          credential={credential}
+          onCredential={setCredential}
+        />
+        <KitchenMetrics {...props} state={state} events={events} detailed />
+        <WorkBoard
+          {...props}
+          state={state}
+          workflow={workflow}
+          onRetry={retryDecision}
+          pending={change.isPending || closed}
+        />
+        {Object.values(state.items).map((item) => (
+          <WorkItemProfileSettings
+            key={item.id}
+            {...props}
+            state={state}
+            workItemId={item.id}
+            roles={workflow?.roles || emptyRoles}
+          />
+        ))}
+        <AgentPool {...props} state={state} workflow={workflow} />
+        <KitchenSafety {...props} state={state} events={events} />
+        <EventLog {...props} events={events} />
+      </Disclosure>
+    </View>
+  );
+}
+
+function MissionHeader(
+  props: PluginSurfaceProps & {
+    state: TeamState;
+    pending: boolean;
+    onControl(action: Control): void;
+    onOpenAgent(id: string): void;
+  },
+) {
+  const { state, theme, navigation, pending, onControl, onOpenAgent } = props;
+  const styles = useFactoryStyles(props);
+  const closed = state.team.status === "done" || state.team.status === "canceled";
+  return (
+    <View style={styles.stack}>
       <Text style={styles.title}>{state.team.title}</Text>
-      <Text style={styles.muted}>
-        {state.team.status} · {state.team.packId} · revision {state.commit} · {state.team.cwd}
-      </Text>
+      <Text style={styles.text}>{state.team.objective}</Text>
       <Text style={styles.muted}>
         {state.team.kitchen?.missionMode === "goal-driven"
           ? "Goal-driven · discovering and completing scoped work until the goal is verified."
@@ -106,9 +247,16 @@ export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
       <View style={styles.row}>
         <Action
           theme={theme}
+          title={state.team.status === "paused" ? "Resume mission" : "Pause new work"}
+          value={state.team.status === "paused" ? ("resume" as const) : ("pause" as const)}
+          onAction={onControl}
+          disabled={closed || pending || Boolean(state.team.runtime?.limitReason)}
+        />
+        <Action
+          theme={theme}
           title="Open Head Chef"
           value={state.team.bossAgentId}
-          onAction={openAgent}
+          onAction={onOpenAgent}
           disabled={!navigation}
         />
         {state.team.kitchen?.sourceAgentId ? (
@@ -116,100 +264,13 @@ export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
             theme={theme}
             title="Open source session"
             value={state.team.kitchen.sourceAgentId}
-            onAction={openAgent}
+            onAction={onOpenAgent}
             disabled={!navigation}
           />
         ) : null}
       </View>
       {state.team.pausedReason ? (
         <Text style={styles.danger}>{state.team.pausedReason}</Text>
-      ) : null}
-      {team.error || change.error ? (
-        <Text accessibilityLiveRegion="polite" style={styles.danger}>
-          {String(team.error || change.error)}
-        </Text>
-      ) : null}
-      <KitchenControls
-        {...props}
-        state={state}
-        confirmation={confirmation}
-        pending={change.isPending}
-        onControl={control}
-        onConfirm={confirm}
-        onDismiss={dismiss}
-        credential={credential}
-        onCredential={setCredential}
-      />
-      <View style={styles.row}>
-        {views.map((name) => (
-          <Action
-            key={name}
-            theme={theme}
-            title={name === view ? `• ${name}` : name}
-            selected={name === view}
-            value={name}
-            onAction={setView}
-          />
-        ))}
-      </View>
-      {view === "Team chat" ? (
-        <AgentTimeline
-          key={state.team.bossAgentId}
-          {...props}
-          agentId={state.team.bossAgentId}
-          canSend={!closed}
-          sendMessage={sendToBoss}
-        />
-      ) : null}
-      {view === "Agents" ? <AgentPool {...props} state={state} workflow={workflow} /> : null}
-      {view === "Mission" ? (
-        <View style={styles.stack}>
-          <View style={styles.row}>
-            {jobViews.map((name) => (
-              <Action
-                key={name}
-                theme={theme}
-                title={name === jobView ? `• ${name}` : name}
-                value={name}
-                onAction={setJobView}
-              />
-            ))}
-          </View>
-          {jobView === "Overview" ? (
-            <>
-              <KitchenMetrics {...props} state={state} events={events} />
-              <WorkBoard
-                {...props}
-                state={state}
-                workflow={workflow}
-                onRetry={retryDecision}
-                pending={change.isPending || closed}
-              />
-              {Object.values(state.items).map((item) => (
-                <WorkItemProfileSettings
-                  key={item.id}
-                  {...props}
-                  state={state}
-                  workItemId={item.id}
-                  roles={workflow?.roles || emptyRoles}
-                />
-              ))}
-              <EventLog {...props} events={events} />
-            </>
-          ) : null}
-          {jobView === "Acceptance" ? (
-            <KitchenVerification
-              {...props}
-              state={state}
-              onControl={control}
-              pending={change.isPending}
-            />
-          ) : null}
-          {jobView === "Insights" ? (
-            <KitchenMetrics {...props} state={state} events={events} detailed />
-          ) : null}
-          {jobView === "Safety" ? <KitchenSafety {...props} state={state} events={events} /> : null}
-        </View>
       ) : null}
     </View>
   );
@@ -241,9 +302,6 @@ function KitchenVerification(
           {problem || "Ready for your acceptance. Server checks run again when accepting."}
         </Text>
       )}
-      {Object.values(state.items).map((item) => (
-        <WorkCard key={item.id} {...props} state={state} item={item} />
-      ))}
       <Action
         theme={theme}
         title="Accept verified result"
@@ -272,6 +330,7 @@ function KitchenControls(
     onDismiss(): void;
     credential: string;
     onCredential(value: string): void;
+    onlyConfirmation?: boolean;
   },
 ) {
   const { state, theme, confirmation, pending, onControl, onConfirm, onDismiss } = props;
@@ -281,45 +340,49 @@ function KitchenControls(
   const root = state.items[state.team.rootItemId];
   return (
     <View style={styles.stack}>
-      <View style={styles.row}>
-        <Action
-          theme={theme}
-          title="Pause queue"
-          value="pause"
-          onAction={onControl}
-          disabled={pending || state.team.status !== "active"}
-        />
-        <Action
-          theme={theme}
-          title="Resume queue"
-          value="resume"
-          onAction={onControl}
-          disabled={
-            pending || state.team.status !== "paused" || Boolean(state.team.runtime?.limitReason)
-          }
-        />
-        <Action
-          theme={theme}
-          title="Stop active Cooks"
-          value="stop"
-          onAction={onControl}
-          disabled={pending || closed}
-        />
-        <Action
-          theme={theme}
-          title="Cancel Kitchen"
-          value="cancel"
-          onAction={onControl}
-          disabled={pending || closed}
-        />
-      </View>
-      <Text style={styles.muted}>
-        Pause prevents new starts; active Cooks continue. Stop interrupts Cooks and allows
-        resumption. Cancel closes this run.
-      </Text>
+      {!props.onlyConfirmation ? (
+        <View style={styles.row}>
+          <Action
+            theme={theme}
+            title="Pause queue"
+            value="pause"
+            onAction={onControl}
+            disabled={pending || state.team.status !== "active"}
+          />
+          <Action
+            theme={theme}
+            title="Resume queue"
+            value="resume"
+            onAction={onControl}
+            disabled={
+              pending || state.team.status !== "paused" || Boolean(state.team.runtime?.limitReason)
+            }
+          />
+          <Action
+            theme={theme}
+            title="Stop active Cooks"
+            value="stop"
+            onAction={onControl}
+            disabled={pending || closed}
+          />
+          <Action
+            theme={theme}
+            title="Cancel Kitchen"
+            value="cancel"
+            onAction={onControl}
+            disabled={pending || closed}
+          />
+        </View>
+      ) : null}
+      {!props.onlyConfirmation ? (
+        <Text style={styles.muted}>
+          Pause prevents new starts; active Cooks continue. Stop interrupts Cooks and allows
+          resumption. Cancel closes this run.
+        </Text>
+      ) : null}
       {confirmation ? (
         <View style={styles.card}>
-          <Text style={styles.heading}>{confirmation ? confirmationTitles[confirmation] : ""}</Text>
+          <Text style={styles.heading}>{confirmationTitles[confirmation]}</Text>
           <Text style={styles.text}>
             {confirmation === "accept"
               ? `Final verified commit: ${String(root?.pack.verifiedCommit || "unavailable")}. Kitchen will recheck HEAD, the clean checkout and all criterion evidence. This records acceptance; merge and deploy require their own authorization.`

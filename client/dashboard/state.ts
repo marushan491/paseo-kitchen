@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { factoryList } from "../../shared/factory-contracts.js";
+import { factoryList, type TeamState } from "../../shared/factory-contracts.js";
 import { kitchenAgentIds } from "../../shared/dashboard/kitchen-scope.js";
 import { kitchenCompletionByWorkspace } from "../../shared/dashboard/completion-model.js";
 import { useRpc, type PluginSurfaceProps } from "@getpaseo/plugin/client";
@@ -37,6 +37,7 @@ function bindSnapshot(next: WireSnapshot, ownId: string): Snapshot {
   };
 }
 const EMPTY_PREFERENCES = { snoozedUntil: {}, doneAt: {} };
+const EMPTY_TEAMS: TeamState[] = [];
 
 export function useDashboard(props: PluginSurfaceProps) {
   const read = useRpc(dashboardSnapshot);
@@ -53,6 +54,16 @@ export function useDashboard(props: PluginSurfaceProps) {
   const [nowMs, setNowMs] = useState(Date.now);
   const memberIds = useMemo(() => kitchenAgentIds(teams.data?.teams ?? []), [teams.data]);
   const directory = useDirectory(props, memberIds, teams.isSuccess);
+  const agents = useMemo(
+    () =>
+      Object.fromEntries(
+        (
+          directory.inventories.find((inventory) => inventory.serverId === props.host.id)?.agents ??
+          []
+        ).map((agent) => [agent.id, agent]),
+      ),
+    [directory.inventories, props.host.id],
+  );
   const preferenceRevision = useRef(0);
   const refresh = useCallback(async () => {
     try {
@@ -192,6 +203,10 @@ export function useDashboard(props: PluginSurfaceProps) {
   );
   return {
     ...directory,
+    teams: teams.data?.teams ?? EMPTY_TEAMS,
+    teamsLoading: teams.isPending,
+    agents,
+    nowMs,
     sessions,
     kitchenCompletions,
     schedules,
