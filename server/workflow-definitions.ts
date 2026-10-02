@@ -57,15 +57,10 @@ export function validateDefinition(
   )
     throw new Error("Combined integration, verification and human acceptance cannot be changed");
   if (
-    JSON.stringify(value.roles.verifier) !==
-    JSON.stringify(definitionFromPack(base, value.id).roles.verifier)
+    JSON.stringify(verifierPolicy(value.roles.verifier)) !==
+    JSON.stringify(verifierPolicy(base.roles.verifier))
   )
-    throw new Error("Independent Verifier cannot be changed");
-  if (
-    value.runtimePolicy?.dependencyPhase !== undefined &&
-    value.runtimePolicy.dependencyPhase !== base.dependencyPhase
-  )
-    throw new Error("Verified dependency completion cannot be changed");
+    throw new Error("Independent Verifier read-only workspace and tools cannot be changed");
   validateRoles(value);
   validateBoards(value, base);
   validateCompletion(value, base);
@@ -94,7 +89,8 @@ function validateCompletion(value: WorkflowDefinition, base: WorkflowPack) {
   const board = value.boards.item;
   if (
     !board ||
-    JSON.stringify(board.phases.verify) !== JSON.stringify(base.boards.item.phases.verify)
+    JSON.stringify(protectedPhase(board.phases.verify)) !==
+      JSON.stringify(protectedPhase(base.boards.item.phases.verify))
   )
     throw new Error("Independent item verification and returns cannot be changed");
   if (
@@ -294,4 +290,22 @@ export function packFromSnapshot(value: WorkflowDefinition): WorkflowPack {
     requireVerification: true,
     ...value.runtimePolicy,
   });
+}
+
+function verifierPolicy(
+  role: WorkflowDefinition["roles"][string] | WorkflowPack["roles"][string] | undefined,
+) {
+  if (!role) return null;
+  return {
+    id: role.id,
+    canEdit: role.canEdit,
+    workspace: role.workspace,
+    tools: role.tools,
+    evidence: role.evidence,
+  };
+}
+function protectedPhase(phase: WorkflowDefinition["boards"][string]["phases"][string] | undefined) {
+  if (!phase) return null;
+  const { title: _title, maxReturns: _maxReturns, ...policy } = phase;
+  return policy;
 }

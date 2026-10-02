@@ -128,3 +128,14 @@ it("persists configured delegation and return limits and rejects conditional ski
   unsafe.boards.item.phases["security-review"].skipTo = "implement";
   expect(() => validateDefinition(unsafe, kitchenPack)).toThrow("independent verification");
 });
+
+it("allows Verifier behavior and skill customization while preserving its independent workspace and result routes", () => {
+  const value = definitionFromPack(kitchenPack, "custom-verifier");
+  value.roles.verifier.instructions = "Inspect current evidence against the complete goal";
+  value.roles.verifier.skills = ["code-review"];
+  value.roles.verifier.communication = { clarification: "head-chef", investigation: "human" };
+  value.boards.item.phases.verify.maxReturns = 5;
+  expect(validateDefinition(value, kitchenPack).roles.verifier.skills).toEqual(["code-review"]);
+  value.roles.verifier.workspace = "team";
+  expect(() => validateDefinition(value, kitchenPack)).toThrow("read-only workspace");
+});
