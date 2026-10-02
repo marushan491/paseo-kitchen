@@ -13,7 +13,11 @@ import { useRpc } from "@getpaseo/plugin/client";
 import { useQuery } from "@tanstack/react-query";
 import { partitionInbox } from "../../shared/dashboard/overview.js";
 import { MissionSummaryRow } from "../mission-summary.js";
-import { missionSummary, type MissionPack } from "../../shared/mission-stage.js";
+import {
+  missionSummary,
+  missionWorkflowFor,
+  type MissionPack,
+} from "../../shared/mission-stage.js";
 
 export type DashboardProps = PluginSurfaceProps & {
   projectPath?: string;
@@ -99,7 +103,8 @@ export function Dashboard(props: DashboardProps) {
     () =>
       active.filter(
         (mission) =>
-          missionSummary(mission, workflowFor(mission, availablePacks), allState.agents).problem,
+          missionSummary(mission, missionWorkflowFor(mission, availablePacks), allState.agents)
+            .problem,
       ),
     [active, availablePacks, allState.agents],
   );
@@ -259,12 +264,6 @@ function NeedsYou(
   );
 }
 
-function workflowFor(mission: TeamState, packs: readonly MissionPack[]) {
-  return packs.find(
-    (pack) => pack.id === mission.team.packId && pack.version === mission.team.packVersion,
-  )?.workflow;
-}
-
 function MissionGroup(
   props: DashboardProps & {
     title: string;
@@ -297,7 +296,7 @@ function MissionGroup(
           {...props}
           state={mission}
           agents={props.state.agents}
-          workflow={workflowFor(mission, props.packs)}
+          workflow={missionWorkflowFor(mission, props.packs)}
           onOpen={teamNavigation}
         />
       ))}
@@ -354,12 +353,15 @@ function Problems(
           <MissionSummaryRow
             {...props}
             state={mission}
-            workflow={workflowFor(mission, props.packs)}
+            workflow={missionWorkflowFor(mission, props.packs)}
             agents={state.agents}
             onOpen={props.teamNavigation}
           />
           <Text style={styles.danger}>
-            {missionSummary(mission, workflowFor(mission, props.packs), state.agents).problem}
+            {
+              missionSummary(mission, missionWorkflowFor(mission, props.packs), state.agents)
+                .problem
+            }
           </Text>
         </View>
       ))}

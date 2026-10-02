@@ -5,12 +5,14 @@ import {
   softwareBasicPack,
   type WorkflowPack,
 } from "../server/pack.js";
+import { definitionFromPack } from "../server/workflow-definitions.js";
 import { createTeamState } from "../server/engine.js";
 import { FactoryWorkflowSchema, type TeamState, type WorkItem } from "./factory-contracts.js";
 import {
   filterMissions,
   missionStages,
   missionSummary,
+  missionWorkflowFor,
   stageTitle,
   type MissionAgents,
 } from "./mission-stage.js";
@@ -259,4 +261,30 @@ it("canceled records remain reachable via All and missing pack state never fabri
   expect(filterMissions([summary], "active")).toEqual([]);
   expect(filterMissions([summary], "completed")).toEqual([]);
   expect(filterMissions([summary], "all")).toEqual([summary]);
+});
+
+it("projects the executed custom workflow snapshot even after its catalog changes", () => {
+  const { state } = fixture();
+  const snapshot = definitionFromPack(kitchenPack, "custom-team");
+  snapshot.revision = 2;
+  snapshot.boards.item.phases.implement.title = "Build approved login flow";
+  state.team.workflowSnapshot = snapshot;
+  state.team.packId = "workflow-custom-team";
+  state.team.packVersion = 2;
+  const installed = [{ ...kitchenPack, workflow: FactoryWorkflowSchema.parse(kitchenPack) }];
+  const executed = missionWorkflowFor(state, installed);
+  expect(executed).toBe(snapshot);
+  expect(
+    missionStages(state, executed).some((stage) => stage.title === "Build approved login flow"),
+  ).toBe(true);
+  expect(state.team.workflowSnapshot.revision).toBe(2);
+});
+
+it("uses only the exact installed pack version when no mission snapshot exists", () => {
+  const { state, workflow } = fixture();
+  const installed = [{ ...kitchenPack, workflow }];
+  expect(missionWorkflowFor(state, installed)).toBe(workflow);
+  expect(
+    missionWorkflowFor(state, [{ ...installed[0], version: kitchenPack.version + 1 }]),
+  ).toBeUndefined();
 });

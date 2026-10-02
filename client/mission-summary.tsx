@@ -12,6 +12,7 @@ import {
   filterMissions,
   missionAge,
   missionSummary,
+  missionWorkflowFor,
   type MissionAgents,
   type MissionFilter,
   type MissionPack,
@@ -251,13 +252,7 @@ export function MissionList(
       schedule.target.cwd.startsWith(props.projectPath + "/"),
   );
   const summaries = props.teams.map((state) =>
-    missionSummary(
-      state,
-      props.packs.find(
-        (pack) => pack.id === state.team.packId && pack.version === state.team.packVersion,
-      )?.workflow,
-      props.agents,
-    ),
+    missionSummary(state, missionWorkflowFor(state, props.packs), props.agents),
   );
   const rows = filter === "scheduled" ? [] : filterMissions(summaries, filter);
   const counts: Record<typeof filter, number> = {
@@ -315,12 +310,7 @@ export function MissionList(
               {...props}
               state={state}
               selected={summary.teamId === props.selected}
-              workflow={
-                props.packs.find(
-                  (pack) =>
-                    pack.id === state.team.packId && pack.version === state.team.packVersion,
-                )?.workflow
-              }
+              workflow={missionWorkflowFor(state, props.packs)}
             />
           );
         })

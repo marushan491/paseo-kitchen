@@ -10,7 +10,16 @@ import type {
 import { readAgentRoutingNotice } from "./agent-routing.js";
 
 export type MissionPack = z.infer<typeof FactoryPackSchema>;
-export type MissionWorkflow = z.infer<typeof FactoryWorkflowSchema>;
+export type MissionWorkflow = Pick<z.infer<typeof FactoryWorkflowSchema>, "boards" | "roles">;
+export function missionWorkflowFor(
+  state: TeamState,
+  packs: readonly MissionPack[],
+): MissionWorkflow | undefined {
+  if (state.team.workflowSnapshot) return state.team.workflowSnapshot;
+  return packs.find(
+    (pack) => pack.id === state.team.packId && pack.version === state.team.packVersion,
+  )?.workflow;
+}
 export type MissionAgent = Pick<PaseoAgent, "id" | "status" | "pendingPermissions"> & {
   routingNotice?: unknown;
   lastError?: string | null;
