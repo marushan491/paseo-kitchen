@@ -1,3 +1,6 @@
+import { RoleProfileOverrideSchema } from "./role-profile-contracts.js";
+export { RoleProfileOverrideSchema, WorkflowStepSchema } from "./role-profile-contracts.js";
+import { WorkflowDefinitionSchema } from "./workflow-contracts.js";
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 import { ScheduleCadenceSchema } from "@getpaseo/protocol/schedule/types";
@@ -30,21 +33,6 @@ export const CriterionSchema = z.object({
   evidence: z.string().optional(),
 });
 
-export const WorkflowStepSchema = z.object({
-  id: z.string().min(1),
-  title: z.string().min(1),
-  instructions: z.string().min(1),
-});
-export const RoleProfileOverrideSchema = z.object({
-  provider: z.string().min(1).optional(),
-  model: z.string().min(1).optional(),
-  thinking: z.string().min(1).optional(),
-  mode: z.string().min(1).optional(),
-  workflowProfileId: z.string().min(1).optional(),
-  instructions: z.string().optional(),
-  skills: z.array(z.string().min(1)).optional(),
-  steps: z.array(WorkflowStepSchema).optional(),
-});
 export const RoleProfileSchema = RoleProfileOverrideSchema.extend({ provider: z.string().min(1) });
 export type RoleProfile = z.infer<typeof RoleProfileSchema>;
 export type RoleProfileOverride = z.infer<typeof RoleProfileOverrideSchema>;
@@ -210,6 +198,7 @@ export const TeamSchema = z.object({
   importedFrom: z
     .object({ source: z.string(), importedAt: z.string(), readOnly: z.boolean() })
     .optional(),
+  workflowSnapshot: WorkflowDefinitionSchema.optional(),
   runtime: TeamRuntimeSchema.optional(),
   kitchen: z
     .object({
@@ -290,7 +279,13 @@ export const TeamReportPayloadSchema = z.object({
     .array(z.object({ id: z.string(), met: z.boolean(), evidence: z.string() }))
     .optional(),
   needs: z
-    .object({ kind: z.enum(["human", "research", "split"]), text: z.string() })
+    .object({
+      kind: z.enum(["human", "head-chef", "research", "split"]),
+      category: z
+        .enum(["clarification", "architecture", "requirements", "irreversible"])
+        .optional(),
+      text: z.string(),
+    })
     .optional()
     .describe(
       "Only when you could not finish your part and someone must decide or add something. Leave it out when your part is done.",
@@ -411,6 +406,7 @@ export const WorkRequestSchema = z.object({
 });
 export type WorkRequestInput = z.infer<typeof WorkRequestSchema>;
 export const StartKitchenSchema = z.object({
+  workflowId: z.string().optional(),
   title: z.string().min(1),
   objective: z.string().min(1),
   cwd: z.string().min(1),

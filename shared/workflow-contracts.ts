@@ -1,3 +1,4 @@
+import { RoleProfileOverrideSchema } from "./role-profile-contracts.js";
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 
@@ -47,6 +48,15 @@ export const WorkflowDefinitionSchema = z.object({
   basePackId: WorkflowIdSchema,
   basePackVersion: z.number().int().positive(),
   title: z.string().min(1).max(160),
+  roleProfiles: z.record(WorkflowIdSchema, RoleProfileOverrideSchema).optional(),
+  runtimePolicy: z
+    .object({
+      maxReturns: z.number().int().nonnegative(),
+      maxDelegationDepth: z.number().int().nonnegative().optional(),
+      maxDelegatedItems: z.number().int().nonnegative().optional(),
+      dependencyPhase: WorkflowIdSchema.optional(),
+    })
+    .optional(),
   roles: z.record(WorkflowIdSchema, WorkflowRoleSchema),
   boards: z.record(
     WorkflowIdSchema,
