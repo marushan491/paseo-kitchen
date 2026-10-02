@@ -20,6 +20,13 @@ export function missionWorkflowFor(
     (pack) => pack.id === state.team.packId && pack.version === state.team.packVersion,
   )?.workflow;
 }
+export function missionInProject(state: TeamState, projectPath?: string): boolean {
+  if (!projectPath) return true;
+  const observedRoot = state.items[state.team.rootItemId]?.pack.nativeProjectRootPath;
+  if (typeof observedRoot === "string" && observedRoot) return observedRoot === projectPath;
+  return state.team.cwd === projectPath || state.team.cwd.startsWith(projectPath + "/");
+}
+
 export function missionAgentIds(teams: readonly TeamState[]): string[] {
   const ids = new Set<string>();
   for (const state of teams) {

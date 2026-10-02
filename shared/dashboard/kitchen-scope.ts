@@ -1,4 +1,5 @@
 import type { TeamState } from "../factory-contracts.js";
+import { missionInProject } from "../mission-stage.js";
 
 export function kitchenAgentIds(teams: readonly TeamState[]): string[] {
   return [
@@ -18,10 +19,7 @@ export function kitchenHumanRequests(teams: readonly TeamState[], projectPath?: 
   return teams
     .filter(
       (state) =>
-        !["done", "canceled"].includes(state.team.status) &&
-        (!projectPath ||
-          state.team.cwd === projectPath ||
-          state.team.cwd.startsWith(projectPath + "/")),
+        !["done", "canceled"].includes(state.team.status) && missionInProject(state, projectPath),
     )
     .flatMap((state) =>
       Object.values(state.items)

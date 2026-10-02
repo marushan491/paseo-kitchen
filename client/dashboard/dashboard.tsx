@@ -16,6 +16,7 @@ import { MissionSummaryRow } from "../mission-summary.js";
 import {
   missionSummary,
   missionWorkflowFor,
+  missionInProject,
   type MissionPack,
 } from "../../shared/mission-stage.js";
 
@@ -75,13 +76,7 @@ export function Dashboard(props: DashboardProps) {
   }, [state]);
   const { needsYou } = partitionInbox(state.inbox.items);
   const missions = useMemo(
-    () =>
-      allState.teams.filter(
-        (mission) =>
-          !props.projectPath ||
-          mission.team.cwd === props.projectPath ||
-          mission.team.cwd.startsWith(props.projectPath + "/"),
-      ),
+    () => allState.teams.filter((mission) => missionInProject(mission, props.projectPath)),
     [allState.teams, props.projectPath],
   );
   const active = useMemo(

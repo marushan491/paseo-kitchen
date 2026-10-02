@@ -13,6 +13,7 @@ import {
   missionAge,
   missionSummary,
   missionWorkflowFor,
+  missionInProject,
   type MissionAgents,
   type MissionFilter,
   type MissionPack,
@@ -240,13 +241,7 @@ export function MissionList(
 ) {
   const styles = useSummaryStyles(props);
   const visibleTeams = useMemo(
-    () =>
-      props.teams.filter(
-        (state) =>
-          !props.projectPath ||
-          state.team.cwd === props.projectPath ||
-          state.team.cwd.startsWith(props.projectPath + "/"),
-      ),
+    () => props.teams.filter((state) => missionInProject(state, props.projectPath)),
     [props.teams, props.projectPath],
   );
   const live = useMissionListAgents(visibleTeams, props.host.id, props.agents === undefined);

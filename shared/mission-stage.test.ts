@@ -5,6 +5,7 @@ import {
   softwareBasicPack,
   type WorkflowPack,
 } from "../server/pack.js";
+import { kitchenHumanRequests } from "./dashboard/kitchen-scope.js";
 import { definitionFromPack } from "../server/workflow-definitions.js";
 import { createTeamState } from "../server/engine.js";
 import { FactoryWorkflowSchema, type TeamState, type WorkItem } from "./factory-contracts.js";
@@ -14,6 +15,7 @@ import {
   missionSummary,
   missionWorkflowFor,
   missionAgentIds,
+  missionInProject,
   stageTitle,
   type MissionAgents,
 } from "./mission-stage.js";
@@ -399,4 +401,24 @@ it("observes only mission bosses and active bindings with stable deduplicated ID
   expect(missionAgentIds([state])).toEqual([]);
   state.team.status = "canceled";
   expect(missionAgentIds([state])).toEqual([]);
+});
+
+it("keeps external-worktree missions in their observed project and preserves legacy boundaries", () => {
+  const { state, root } = fixture();
+  state.team.cwd = "/outside/worktrees/login-feature";
+  root.pack.nativeProjectRootPath = "/projects/login";
+  root.phase = "blocked";
+  expect(missionInProject(state, "/projects/login")).toBe(true);
+  expect(missionInProject(state, "/outside/worktrees/login-feature")).toBe(false);
+  expect(missionInProject(state, "/projects")).toBe(false);
+  expect(missionInProject(state)).toBe(true);
+  expect(kitchenHumanRequests([state], "/projects/login")).toHaveLength(1);
+  expect(kitchenHumanRequests([state], "/projects/other")).toHaveLength(0);
+  delete root.pack.nativeProjectRootPath;
+  state.team.cwd = "/projects/login/nested-worktree";
+  expect(missionInProject(state, "/projects/login")).toBe(true);
+  state.team.cwd = "/projects/login-other";
+  expect(missionInProject(state, "/projects/login")).toBe(false);
+  root.pack.nativeProjectRootPath = { unconfirmed: "/projects/login" };
+  expect(missionInProject(state, "/projects/login")).toBe(false);
 });
