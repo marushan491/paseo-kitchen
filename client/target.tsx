@@ -3,8 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { type PluginSurfaceProps, usePaseo } from "@getpaseo/plugin/client";
 import { useCallback, useMemo, useState } from "react";
 import { Text, View } from "react-native";
+import { Choice } from "./choice.js";
 import type { StartKitchenInput } from "../shared/factory-contracts.js";
-import { Action, useFactoryStyles } from "./ui.js";
+import { useFactoryStyles } from "./ui.js";
 
 type Target = Pick<
   StartKitchenInput,
@@ -80,49 +81,67 @@ export function TargetSelection(
     onProject(path: string): void;
   },
 ) {
-  const { selection, hasSource, theme, onProject } = props;
+  const { selection, hasSource, onProject } = props;
   const styles = useFactoryStyles(props);
   const error = selection.projects.error || selection.providers.error || selection.models.error;
+  const projectOptions = useMemo(
+    () =>
+      (selection.projects.data?.projects ?? []).map((project) => ({
+        id: project.projectRootPath,
+        title: project.projectDisplayName,
+      })),
+    [selection.projects.data],
+  );
+  const providerOptions = useMemo(
+    () =>
+      (selection.providers.data ?? []).map((entry) => ({
+        id: entry.provider,
+        title: `${entry.provider}${entry.available ? "" : " · unavailable"}`,
+        disabled: !entry.available,
+      })),
+    [selection.providers.data],
+  );
+  const modelOptions = useMemo(
+    () =>
+      (selection.models.data ?? []).map((entry) => ({
+        id: entry.id,
+        title: `${entry.label}${entry.isDefault ? " · default" : ""}`,
+      })),
+    [selection.models.data],
+  );
   return (
     <View style={styles.stack}>
-      <Text style={styles.muted}>Project</Text>
-      {selection.projects.data?.projects.map((project) => (
-        <Action
-          key={project.projectId}
-          theme={theme}
-          title={project.projectDisplayName}
-          value={project.projectRootPath}
-          onAction={onProject}
-        />
-      ))}
+      <Choice
+        {...props}
+        label="Project"
+        value={selection.target.cwd}
+        options={projectOptions}
+        onChange={onProject}
+      />
       {!hasSource ? (
-        <>
-          <Text style={styles.muted}>Provider · discovered on this host</Text>
+        <View style={styles.stack}>
+          <Choice
+            {...props}
+            label="Provider"
+            value={selection.provider}
+            options={providerOptions}
+            onChange={selection.chooseProvider}
+          />
           {selection.providers.isPending ? (
             <Text style={styles.muted}>Loading providers…</Text>
           ) : null}
-          {selection.providers.data?.map((entry) => (
-            <Action
-              key={entry.provider}
-              theme={theme}
-              title={`${entry.provider === selection.provider ? "✓ " : ""}${entry.provider}${entry.available ? "" : " · unavailable"}`}
-              value={entry.provider}
-              onAction={selection.chooseProvider}
-              disabled={!entry.available}
-            />
-          ))}
-          <Text style={styles.muted}>Model · select after choosing a project directory</Text>
+          <Choice
+            {...props}
+            label="Model"
+            value={selection.model}
+            options={modelOptions}
+            onChange={selection.setModel}
+          />
           {selection.models.isFetching ? <Text style={styles.muted}>Loading models…</Text> : null}
-          {selection.models.data?.map((entry) => (
-            <Action
-              key={entry.id}
-              theme={theme}
-              title={`${entry.id === selection.model ? "✓ " : ""}${entry.label}${entry.isDefault ? " · default" : ""}`}
-              value={entry.id}
-              onAction={selection.setModel}
-            />
-          ))}
-        </>
+          {!selection.target.cwd ? (
+            <Text style={styles.muted}>Choose a project directory to load models.</Text>
+          ) : null}
+        </View>
       ) : (
         <Text style={styles.muted}>
           Provider, model, mode and thinking follow the selected source session.

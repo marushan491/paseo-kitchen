@@ -16,13 +16,13 @@ export function registerFactoryClient(
   const cleanup = [
     client.addSettingsScreen({
       id: "factory",
-      title: "Kitchen",
+      title: "Kitchen Studio",
       icon: "Workflow",
       Component: components.Settings,
     }),
     client.addWorkspacePanel({
       id: "factory",
-      title: "Kitchen",
+      title: "Kitchen Studio",
       icon: "Workflow",
       context: "workspace",
       locations: ["workspace", "explorer"],
@@ -30,7 +30,7 @@ export function registerFactoryClient(
     }),
     client.addWorkspacePanel({
       id: "factory-agent",
-      title: "Kitchen",
+      title: "Kitchen Studio",
       icon: "Workflow",
       context: "agent",
       locations: ["workspace", "explorer"],
@@ -53,12 +53,12 @@ export function registerFactoryClient(
   ];
   if (typeof client.addScreen === "function" && typeof client.addSidebarHeaderItem === "function") {
     cleanup.push(
-      client.addScreen({ id: "factory", title: "Kitchen", Component: components.Factory }),
+      client.addScreen({ id: "factory", title: "Kitchen Studio", Component: components.Factory }),
     );
     cleanup.push(
       client.addSidebarHeaderItem({
         id: "factory",
-        title: "Kitchen",
+        title: "Kitchen Studio",
         Component: components.Sidebar,
       }),
     );
@@ -79,7 +79,7 @@ export function registerFactoryClient(
     cleanup.push(
       client.addSidebarItem({
         id: "factory",
-        title: "Kitchen",
+        title: "Kitchen Studio",
         icon: "Workflow",
         surface: "factory",
       }),

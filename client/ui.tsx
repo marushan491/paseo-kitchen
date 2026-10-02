@@ -1,39 +1,59 @@
 import type { PluginHostProps } from "@getpaseo/plugin/client";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useId } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 
 export function Action<T>({
   theme,
   title,
+  accessibilityLabel,
   value,
   onAction,
   disabled = false,
+  variant = "ghost",
+  selected = false,
 }: {
   theme: PluginHostProps["theme"];
   title: string;
+  accessibilityLabel?: string;
   value: T;
   onAction(value: T): void;
   disabled?: boolean;
+  variant?: "primary" | "secondary" | "ghost" | "danger";
+  selected?: boolean;
 }) {
+  const nativeId = useId();
   const press = useCallback(() => onAction(value), [onAction, value]);
-  const styles = useMemo(
-    () => ({
+  const accessibilityState = useMemo(() => ({ selected, disabled }), [selected, disabled]);
+  const styles = useMemo(() => {
+    let borderColor = theme.colors.border;
+    if (variant === "ghost") borderColor = "transparent";
+    if (selected) borderColor = theme.colors.accent;
+    let backgroundColor = "transparent";
+    if (selected) backgroundColor = theme.colors.surface1;
+    if (variant === "primary") backgroundColor = theme.colors.accent;
+    let color = theme.colors.foreground;
+    if (variant === "danger") color = theme.colors.statusDanger;
+    if (variant === "primary") color = theme.colors.surface0;
+    return {
       button: {
         paddingVertical: 10,
         paddingHorizontal: 14,
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: theme.colors.border,
+        borderColor,
+        backgroundColor,
+        minHeight: 44,
         opacity: disabled ? 0.45 : 1,
       },
-      text: { color: theme.colors.accent, fontWeight: "600" as const },
-    }),
-    [theme, disabled],
-  );
+      text: { color, fontWeight: "600" as const },
+    };
+  }, [theme, disabled, variant, selected]);
   return (
     <Pressable
+      nativeID={nativeId}
       accessibilityRole="button"
-      accessibilityLabel={title}
+      accessibilityLabel={accessibilityLabel || title}
+      accessibilityState={accessibilityState}
       disabled={disabled}
       onPress={press}
       style={styles.button}
@@ -49,13 +69,16 @@ export function Field({
   value,
   onChange,
   multiline = false,
+  secureTextEntry = false,
 }: {
   theme: PluginHostProps["theme"];
   label: string;
   value: string;
   onChange(value: string): void;
   multiline?: boolean;
+  secureTextEntry?: boolean;
 }) {
+  const nativeId = useId();
   const styles = useMemo(
     () => ({
       group: { gap: 6 },
@@ -75,10 +98,12 @@ export function Field({
     <View style={styles.group}>
       <Text style={styles.label}>{label}</Text>
       <TextInput
+        nativeID={nativeId}
         accessibilityLabel={label}
         value={value}
         onChangeText={onChange}
         multiline={multiline}
+        secureTextEntry={secureTextEntry}
         placeholderTextColor={theme.colors.foregroundMuted}
         style={styles.input}
       />

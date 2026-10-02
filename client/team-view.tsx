@@ -5,6 +5,7 @@ import type { z } from "zod";
 import { Text, View } from "react-native";
 import {
   factoryKitchenControl,
+  factoryPublish,
   factoryMessage,
   factoryRetry,
   factoryStatus,
@@ -13,12 +14,14 @@ import {
   type WorkItem,
   type TeamEvent,
 } from "../shared/factory-contracts.js";
-import { Action, useFactoryStyles } from "./ui.js";
+import { Action, Field, useFactoryStyles } from "./ui.js";
+import { WorkItemProfileSettings } from "./workflows.js";
 import { AgentTimeline } from "./timeline.js";
 import { acceptanceProblem, kitchenInsights } from "./kitchen-model.js";
 
-const views = ["Teamchat", "Agent-Pool", "Auftrag"] as const;
-const jobViews = ["Übersicht", "Abnahme", "Insights", "Safety"] as const;
+const emptyRoles = {};
+const views = ["Team chat", "Agents", "Mission"] as const;
+const jobViews = ["Overview", "Acceptance", "Insights", "Safety"] as const;
 type Control = "pause" | "resume" | "stop" | "cancel" | "accept";
 
 export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
@@ -35,8 +38,9 @@ export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
   );
   const retry = useRpc(factoryRetry);
   const cache = useQueryClient();
-  const [view, setView] = useState<(typeof views)[number]>("Teamchat");
-  const [jobView, setJobView] = useState<(typeof jobViews)[number]>("Übersicht");
+  const [view, setView] = useState<(typeof views)[number]>("Mission");
+  const [jobView, setJobView] = useState<(typeof jobViews)[number]>("Overview");
+  const [credential, setCredential] = useState("");
   const [confirmation, setConfirmation] = useState<Control | null>(null);
   const team = useQuery({
     queryKey: ["factory", "team", teamId],
@@ -48,8 +52,18 @@ export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
     mutationFn: async (action: Control | { retry: string }) => {
       if (typeof action === "object")
         await retry({ teamId, decisionId: action.retry, actorId: "human" });
-      else await controlRpc({ teamId, action, actorId: "human" });
+      else
+        await controlRpc({
+          teamId,
+          action,
+          actorId: "human",
+          ...(action === "accept"
+            ? { credential, candidateCommit: verifiedCandidate(team.data?.state) }
+            : {}),
+        });
     },
+    gcTime: 0,
+    onSettled: () => setCredential(""),
     onSuccess: async () => {
       setConfirmation(null);
       await cache.invalidateQueries({ queryKey: ["factory"] });
@@ -65,7 +79,10 @@ export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
   const confirm = useCallback(() => {
     if (confirmation) change.mutate(confirmation);
   }, [change, confirmation]);
-  const dismiss = useCallback(() => setConfirmation(null), []);
+  const dismiss = useCallback(() => {
+    setConfirmation(null);
+    setCredential("");
+  }, []);
   const retryDecision = useCallback((id: string) => change.mutate({ retry: id }), [change]);
   const openAgent = useCallback(
     (id: string) => navigation?.openAgent({ agentId: id }),
@@ -118,6 +135,8 @@ export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
         onControl={control}
         onConfirm={confirm}
         onDismiss={dismiss}
+        credential={credential}
+        onCredential={setCredential}
       />
       <View style={styles.row}>
         {views.map((name) => (
@@ -125,12 +144,13 @@ export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
             key={name}
             theme={theme}
             title={name === view ? `• ${name}` : name}
+            selected={name === view}
             value={name}
             onAction={setView}
           />
         ))}
       </View>
-      {view === "Teamchat" ? (
+      {view === "Team chat" ? (
         <AgentTimeline
           key={state.team.bossAgentId}
           {...props}
@@ -139,8 +159,8 @@ export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
           sendMessage={sendToBoss}
         />
       ) : null}
-      {view === "Agent-Pool" ? <AgentPool {...props} state={state} workflow={workflow} /> : null}
-      {view === "Auftrag" ? (
+      {view === "Agents" ? <AgentPool {...props} state={state} workflow={workflow} /> : null}
+      {view === "Mission" ? (
         <View style={styles.stack}>
           <View style={styles.row}>
             {jobViews.map((name) => (
@@ -153,7 +173,7 @@ export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
               />
             ))}
           </View>
-          {jobView === "Übersicht" ? (
+          {jobView === "Overview" ? (
             <>
               <KitchenMetrics {...props} state={state} events={events} />
               <WorkBoard
@@ -163,10 +183,19 @@ export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
                 onRetry={retryDecision}
                 pending={change.isPending || closed}
               />
+              {Object.values(state.items).map((item) => (
+                <WorkItemProfileSettings
+                  key={item.id}
+                  {...props}
+                  state={state}
+                  workItemId={item.id}
+                  roles={workflow?.roles || emptyRoles}
+                />
+              ))}
               <EventLog {...props} events={events} />
             </>
           ) : null}
-          {jobView === "Abnahme" ? (
+          {jobView === "Acceptance" ? (
             <KitchenVerification
               {...props}
               state={state}
@@ -239,6 +268,8 @@ function KitchenControls(
     onControl(action: Control): void;
     onConfirm(): void;
     onDismiss(): void;
+    credential: string;
+    onCredential(value: string): void;
   },
 ) {
   const { state, theme, confirmation, pending, onControl, onConfirm, onDismiss } = props;
@@ -299,13 +330,31 @@ function KitchenControls(
                 </Text>
               ))
             : null}
+          {confirmation === "accept" ? (
+            <>
+              <Field
+                theme={theme}
+                label="Operator credential · used only for this approval"
+                secureTextEntry
+                value={props.credential}
+                onChange={props.onCredential}
+              />
+              <Text style={styles.muted}>
+                Approval proves possession of the configured plugin credential, not a verified human
+                identity. The server rechecks this candidate commit.
+              </Text>
+            </>
+          ) : null}
           <View style={styles.row}>
             <Action
               theme={theme}
               title="Confirm action"
               value="confirm"
               onAction={onConfirm}
-              disabled={pending || (confirmation === "accept" && Boolean(problem))}
+              disabled={
+                pending ||
+                (confirmation === "accept" && (Boolean(problem) || !props.credential.trim()))
+              }
             />
             <Action
               theme={theme}
@@ -468,6 +517,60 @@ function KitchenSafety(props: PluginSurfaceProps & { state: TeamState; events: T
       ) : (
         <Text style={styles.muted}>Runtime limits unavailable for this legacy run.</Text>
       )}
+      {props.state.team.kitchen?.classification ? (
+        <View style={styles.card}>
+          <Text style={styles.heading}>Recorded execution classification</Text>
+          <Text style={styles.text}>
+            {props.state.team.kitchen.classification.executionMode} ·{" "}
+            {props.state.team.kitchen.classification.reason}
+          </Text>
+          <Text style={styles.muted}>
+            {props.state.team.kitchen.classification.source} ·{" "}
+            {props.state.team.kitchen.classification.model} · confidence{" "}
+            {props.state.team.kitchen.classification.confidence} ·{" "}
+            {props.state.team.kitchen.classification.latencyMs} ms
+          </Text>
+        </View>
+      ) : null}
+      <Text style={styles.heading}>Recorded mission policy</Text>
+      {props.state.team.policy ? (
+        Object.entries(props.state.team.policy).map(([name, value]) => (
+          <Text key={name} style={styles.text}>
+            {name}: {value}
+          </Text>
+        ))
+      ) : (
+        <Text style={styles.muted}>No additional mission policy selected.</Text>
+      )}
+      <Text style={styles.heading}>Trusted evidence checks</Text>
+      {Object.values(props.state.items).every((item) => !item.checks?.length) ? (
+        <Text style={styles.muted}>No trusted evidence checks recorded for this run.</Text>
+      ) : null}
+      {Object.values(props.state.items).flatMap((item) =>
+        (item.checks || []).map((check) => (
+          <View key={`${item.id}:${check.id}:${check.checkedAt}`} style={styles.card}>
+            <Text style={styles.text}>
+              {item.title} · {check.kind} · {check.passed ? "passed" : "failed"}
+            </Text>
+            <Text selectable style={styles.text}>
+              {check.summary}
+            </Text>
+            <Text selectable style={styles.muted}>
+              {check.checkedAt} · candidate {check.candidateCommit || "not recorded"}
+            </Text>
+            {check.artifactSha256 ? (
+              <Text selectable style={styles.muted}>
+                Artifact SHA256: {check.artifactSha256}
+              </Text>
+            ) : null}
+          </View>
+        )),
+      )}
+      <Text style={styles.muted}>
+        Check definitions come from trusted server configuration. This view cannot supply commands
+        or modify protected-file checks.
+      </Text>
+      <Publication {...props} />
       <EventLog {...props} events={safetyEvents} />
     </View>
   );
@@ -614,4 +717,66 @@ function WorkCard(props: PluginSurfaceProps & { state: TeamState; item: WorkItem
       ))}
     </View>
   );
+}
+
+function Publication(props: PluginSurfaceProps & { state: TeamState }) {
+  const styles = useFactoryStyles(props);
+  const publish = useRpc(factoryPublish);
+  const cache = useQueryClient();
+  const [credential, setCredential] = useState("");
+  const state = props.state;
+  const commit = state.team.kitchen?.acceptedCommit;
+  const change = useMutation({
+    gcTime: 0,
+    mutationFn: () => {
+      if (!commit) throw new Error("An accepted candidate commit is required.");
+      return publish({ teamId: state.team.id, credential, candidateCommit: commit });
+    },
+    onSettled: () => setCredential(""),
+    onSuccess: async () => {
+      await cache.invalidateQueries({ queryKey: ["factory"] });
+    },
+  });
+  const submit = useCallback(() => change.mutate(), [change]);
+  if (!state.team.kitchen?.publication?.enabled) return null;
+  if (state.team.kitchen.published)
+    return (
+      <Text selectable style={styles.text}>
+        Published {state.team.kitchen.published.commit}: {state.team.kitchen.published.url}
+      </Text>
+    );
+  return (
+    <View style={styles.card}>
+      <Text style={styles.heading}>Publish accepted result</Text>
+      <Text style={styles.muted}>
+        Explicitly push the accepted commit and create its pull request using the trusted host
+        configuration. This does not merge or deploy.
+      </Text>
+      <Text selectable style={styles.text}>
+        {state.team.kitchen.publication.remote} · {state.team.kitchen.publication.branch} →{" "}
+        {state.team.kitchen.publication.baseBranch}
+      </Text>
+      <Field
+        theme={props.theme}
+        label="Operator credential · publication"
+        secureTextEntry
+        value={credential}
+        onChange={setCredential}
+      />
+      <Action
+        theme={props.theme}
+        title="Publish accepted commit and open pull request"
+        variant="primary"
+        value="publish"
+        onAction={submit}
+        disabled={state.team.status !== "done" || !commit || !credential.trim() || change.isPending}
+      />
+      {change.error ? <Text style={styles.danger}>{String(change.error)}</Text> : null}
+    </View>
+  );
+}
+
+function verifiedCandidate(state?: TeamState): string | undefined {
+  const commit = state?.items[state.team.rootItemId]?.pack.verifiedCommit;
+  return typeof commit === "string" ? commit : undefined;
 }

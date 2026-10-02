@@ -1,3 +1,27 @@
+import type { KitchenDecisionSource } from "./system-one.js";
+import {
+  captureTrackedFiles,
+  assertCriterionEvidence,
+  assertProtectedUnchanged,
+  runIndependentChecks,
+  type IndependentCheckOptions,
+  type ProtectedSnapshot,
+} from "./evidence.js";
+import type { EvidenceResult } from "../shared/factory-contracts.js";
+import { publishCandidate, type PublicationCli, type PublicationRunner } from "./publication.js";
+import {
+  assertPolicyAllows,
+  assertOutcomeJudged,
+  evaluatePolicy,
+  type PolicyObservation,
+} from "./policy.js";
+import { verifyOperatorApproval } from "./approval.js";
+import { WorkflowProfiles } from "./profiles.js";
+import {
+  RoleProfileOverrideSchema,
+  type RoleProfileOverride,
+  type WorkflowProfile,
+} from "../shared/factory-contracts.js";
 import type { FactoryAgent, FactoryController, FactoryLogger } from "./controller.js";
 import { writeJsonFileAtomic } from "./atomic-file.js";
 import { execFile } from "node:child_process";
@@ -82,6 +106,13 @@ export interface TeamServiceOptions {
   timers?: boolean;
   maxConcurrentAgents?: () => number;
   roleProfiles?: () => Team["roleProfiles"];
+  operatorCredential?: () => string | undefined | Promise<string | undefined>;
+  publicationCli?: PublicationCli;
+  publicationRunner?: PublicationRunner;
+  decisionSource?: KitchenDecisionSource;
+  independentChecks?: IndependentCheckOptions;
+  verificationSnapshot?: (cwd: string) => Promise<ProtectedSnapshot>;
+  policyUsage?: (state: TeamState) => Promise<PolicyObservation["usage"]>;
 }
 
 export class TeamNotNeededError extends Error {
@@ -98,6 +129,7 @@ export interface TeamCallerBinding {
 
 export class TeamService {
   readonly store: TeamStore;
+  readonly profiles: WorkflowProfiles;
   private readonly logger: FactoryLogger;
   private dispatchTimer: ReturnType<typeof setInterval> | null = null;
   private healthTimer: ReturnType<typeof setInterval> | null = null;
@@ -109,6 +141,7 @@ export class TeamService {
   private kitchenStartChain: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly options: TeamServiceOptions) {
+    this.profiles = new WorkflowProfiles(options.storageRoot);
     this.store = new TeamStore(join(options.storageRoot, "teams"));
     this.logger = options.logger.child({ module: "team" });
     this.now = options.now ?? (() => new Date());
@@ -167,10 +200,28 @@ export class TeamService {
     return this.limitPack(pack);
   }
 
+  private policyPack(team: Team): WorkflowPack {
+    const pack = this.pack(team);
+    return team.policy?.maxDelegationDepth !== undefined
+      ? {
+          ...pack,
+          maxDelegationDepth: Math.min(
+            pack.maxDelegationDepth ?? 0,
+            team.policy.maxDelegationDepth,
+          ),
+        }
+      : pack;
+  }
+
   private async recoverTeam(teamId: string): Promise<void> {
     const state = await this.store.get(teamId);
     if (!state) return;
-    if (state.team.status === "done" || state.team.status === "canceled") return;
+    if (
+      state.team.importedFrom?.readOnly ||
+      state.team.status === "done" ||
+      state.team.status === "canceled"
+    )
+      return;
     await this.syncKitchenBoss(state.team);
     const pack = this.options.packs.get(state.team.packId);
     if (!pack || pack.version !== state.team.packVersion) {
@@ -297,12 +348,29 @@ export class TeamService {
   ): Promise<boolean> {
     const completion = await this.options.controller.completion?.(binding.agentId);
     if (completion) {
-      await this.verifyReportCheckout(
+      const checks = await this.verifyReportCheckout(
         binding.agentId,
         draft,
         this.pack(draft.team).roles[binding.role],
         completion.report,
       );
+      if (checks.length) {
+        item.checks = checks;
+        events.push({
+          type: "evidence.checked",
+          actor: RUNTIME,
+          workItemId: item.id,
+          text: "Recovered independent verification",
+          data: { checks },
+        });
+        if (checks.some((check) => !check.passed)) {
+          draft.team.status = "paused";
+          draft.team.pausedReason =
+            "Recovered verifier failed independent evidence or protected-file verification";
+          binding.turn = "idle";
+          return true;
+        }
+      }
       if (
         completion.items &&
         !Object.values(draft.items).some((child) => child.parentId === item.id)
@@ -312,7 +380,7 @@ export class TeamService {
         if (draft.team.kitchen?.workflowMode !== "self-organizing")
           throw new ReportRejectedError("Work requests require a self-organizing Kitchen");
         for (const request of completion.workRequests)
-          expandWork(draft, this.pack(draft.team), binding, request, events);
+          expandWork(draft, this.policyPack(draft.team), binding, request, events);
       }
       applyReport(draft, this.pack(draft.team), binding, completion.report, events);
       events.push({
@@ -336,6 +404,8 @@ export class TeamService {
     force?: boolean;
     kitchen?: Team["kitchen"];
     acceptanceCriteria?: Array<{ id: string; text: string }>;
+    roleProfiles?: Record<string, RoleProfileOverride>;
+    policy?: Team["policy"];
   }): Promise<TeamState> {
     const boss = await this.options.controller.get(params.bossAgentId);
     if (!boss) throw new Error(`Boss agent ${params.bossAgentId} not found`);
@@ -350,11 +420,13 @@ export class TeamService {
     if (!pack)
       throw new Error(`Workflow pack ${params.packId ?? profile.workflowPack} is not installed`);
     const defaultProfile = bossProfile(boss);
-    const roleProfiles: Team["roleProfiles"] = {};
-    for (const role of Object.keys(pack.roles)) {
-      roleProfiles[role] =
-        profile.roles?.[role] ?? this.options.roleProfiles?.()[role] ?? defaultProfile;
-    }
+    const roleProfiles = await this.resolveRoleProfiles(
+      pack,
+      cwd,
+      defaultProfile,
+      profile.roles,
+      params.roleProfiles,
+    );
     const { state, events } = createTeamState({
       pack,
       title: params.title,
@@ -365,6 +437,7 @@ export class TeamService {
       roleProfiles,
     });
     state.team.runtime = runtimeState();
+    state.team.policy = params.policy;
     if (params.kitchen) state.team.kitchen = params.kitchen;
     if (params.acceptanceCriteria)
       state.items[state.team.rootItemId]!.acceptanceCriteria = params.acceptanceCriteria;
@@ -377,6 +450,172 @@ export class TeamService {
     });
     void this.dispatchAll();
     return (await this.store.get(state.team.id))!;
+  }
+
+  private async policyObservation(
+    state: TeamState,
+    pendingDecisionId?: string,
+  ): Promise<PolicyObservation> {
+    return {
+      activeMs: state.team.runtime?.usage.activeMs ?? 0,
+      roleActiveMs: state.team.runtime?.usage.roleActiveMs ?? {},
+      startedAgents: new Set(
+        Object.values(state.bindings)
+          .map((binding) => binding.agentId)
+          .filter(Boolean),
+      ).size,
+      delegationDepth: Math.max(
+        0,
+        ...Object.values(state.items).map((item) => Number(item.pack.delegationDepth ?? 0)),
+      ),
+      usage: await this.options.policyUsage?.(state),
+      chainSteps: Object.values(state.decisions)
+        .filter((decision) =>
+          ["start-role", "message-role", "invoke-pack-action"].includes(decision.kind),
+        )
+        .reduce(
+          (total, decision) =>
+            total +
+            Math.max(
+              0,
+              decision.attempts -
+                (decision.id === pendingDecisionId && decision.status === "leased" ? 1 : 0),
+            ),
+          0,
+        ),
+      outcomeJudgeAvailable: Boolean(
+        this.options.decisionSource || this.options.independentChecks?.judge,
+      ),
+    };
+  }
+
+  private normalizeSingleProfiles(
+    pack: WorkflowPack,
+    profiles?: Record<string, RoleProfileOverride>,
+  ): Record<string, RoleProfileOverride> | undefined {
+    if (pack.id !== "kitchen-single" || !profiles) return profiles;
+    const original = this.options.packs.get("kitchen");
+    const normalized: Record<string, RoleProfileOverride> = {};
+    for (const [role, profile] of Object.entries(profiles)) {
+      if (pack.roles[role]) normalized[role] = profile;
+      else if (!original?.roles[role]) throw new Error(`Unknown workflow role ${role}`);
+    }
+    if (!normalized.integrator && profiles.developer) normalized.integrator = profiles.developer;
+    return normalized;
+  }
+
+  private async resolveRoleProfiles(
+    pack: WorkflowPack,
+    cwd: string,
+    base: Team["roleProfiles"][string],
+    project?: Record<string, RoleProfileOverride>,
+    overrides?: Record<string, RoleProfileOverride>,
+  ): Promise<Team["roleProfiles"]> {
+    project = this.normalizeSingleProfiles(pack, project);
+    overrides = this.normalizeSingleProfiles(pack, overrides);
+    const defaults = this.normalizeSingleProfiles(pack, this.options.roleProfiles?.());
+    for (const role of [...Object.keys(project ?? {}), ...Object.keys(overrides ?? {})]) {
+      if (!pack.roles[role]) throw new Error(`Unknown workflow role ${role}`);
+    }
+    const profiles: Team["roleProfiles"] = {};
+    for (const role of Object.keys(pack.roles)) {
+      const configured = await this.profiles.resolve(base, project?.[role] ?? defaults?.[role]);
+      const resolved = await this.profiles.resolve(configured, overrides?.[role]);
+      if (this.options.controller.validateProvider)
+        await this.options.controller.validateProvider({ ...resolved, cwd });
+      profiles[role] = resolved;
+    }
+    return profiles;
+  }
+
+  private executedRoleProfile(
+    state: TeamState,
+    item: WorkItem,
+    role: string,
+  ): Team["roleProfiles"][string] | undefined {
+    const binding = activeBinding(state, item, role);
+    if (binding) return binding.executedProfile ?? state.team.roleProfiles[role];
+    return item.roleProfiles?.[role] ?? state.team.roleProfiles[role];
+  }
+
+  private appendRoleWorkflow(
+    state: TeamState,
+    item: WorkItem,
+    role: string,
+    lines: string[],
+  ): void {
+    const profile = this.executedRoleProfile(state, item, role);
+    if (profile?.instructions)
+      lines.push("", "## Configured role instructions", profile.instructions);
+    if (profile?.steps?.length)
+      lines.push(
+        "",
+        "## Configured workflow steps",
+        "Complete these steps in order within this role. The pack's report outcomes and verification requirements still apply.",
+        ...profile.steps.map(
+          (step, index) => `${index + 1}. ${step.title} [${step.id}]\n${step.instructions}`,
+        ),
+      );
+  }
+
+  async saveProfile(profile: WorkflowProfile, cwd: string): Promise<WorkflowProfile> {
+    const directory = await realpath(cwd);
+    if (profile.profile.provider)
+      await this.options.controller.validateProvider({
+        ...profile.profile,
+        provider: profile.profile.provider,
+        cwd: directory,
+      });
+    else if (profile.profile.model) throw new Error("A saved model requires its provider");
+    return this.profiles.save(profile);
+  }
+
+  async configureWork(
+    teamId: string,
+    workItemId: string,
+    role: string,
+    profile: RoleProfileOverride,
+    actorId: string,
+  ): Promise<TeamState> {
+    const state = await this.store.get(teamId);
+    if (!state) throw new Error(`Team ${teamId} not found`);
+    assertMutableTeam(state.team);
+    const base = state.team.roleProfiles[role];
+    if (!base) throw new Error(`Unknown workflow role ${role}`);
+    const resolved = await this.profiles.resolve(base, RoleProfileOverrideSchema.parse(profile));
+    await this.options.controller.validateProvider({ ...resolved, cwd: state.team.cwd });
+    await this.store.commit(teamId, (draft) => {
+      if (draft.team.status === "done" || draft.team.status === "canceled")
+        throw new Error("Closed jobs cannot be configured");
+      const item = draft.items[workItemId];
+      if (!item) throw new Error(`Work item ${workItemId} not found`);
+      if (isTerminal(this.pack(draft.team), item))
+        throw new Error("Completed work items cannot be configured");
+      if (
+        Object.values(draft.decisions).some(
+          (decision) =>
+            decision.workItemId === workItemId &&
+            decision.kind === "start-role" &&
+            decision.payload.role === role &&
+            decision.status === "leased",
+        )
+      )
+        throw new Error("Role dispatch is in progress; pause and try again after it settles");
+      (item.roleProfiles ??= {})[role] = resolved;
+      return {
+        events: [
+          {
+            type: "role.configured",
+            actor: { type: "human" as const, id: actorId },
+            workItemId,
+            text: `Configured ${role} for the next agent`,
+            data: { profile: resolved },
+          },
+        ],
+        result: null,
+      };
+    });
+    return (await this.store.get(teamId))!;
   }
 
   listPacks(): WorkflowPack[] {
@@ -412,7 +651,35 @@ export class TeamService {
       await this.syncKitchenBoss(previous.team);
       return previous;
     }
-    const { cwd, pack, criteria, workspaceId } = await this.prepareKitchen(params);
+    if (params.policy)
+      assertPolicyAllows(params.policy, {
+        startedAgents: 0,
+        delegationDepth: 0,
+        activeMs: 0,
+        roleActiveMs: {},
+        chainSteps: 0,
+        usage: this.options.policyUsage
+          ? { scope: "team", complete: true, cumulative: true, tokens: 0, costUsd: 0 }
+          : undefined,
+        outcomeJudgeAvailable: Boolean(
+          this.options.decisionSource || this.options.independentChecks?.judge,
+        ),
+      });
+    let resolvedMode = params.executionMode;
+    let classification: NonNullable<NonNullable<Team["kitchen"]>["classification"]> | undefined;
+    if (params.executionMode === "auto") {
+      if (!this.options.decisionSource)
+        throw new Error(
+          "Configure the host's System One decision source before automatic Lead routing",
+        );
+      classification = await this.options.decisionSource.classify(params);
+      if (classification.executionMode === "human")
+        throw new Error(`Lead routing requires human clarification: ${classification.reason}`);
+    }
+    if (classification && classification.executionMode !== "human")
+      resolvedMode = classification.executionMode;
+    const effective = { ...params, executionMode: resolvedMode };
+    const { cwd, pack, criteria, workspaceId } = await this.prepareKitchen(effective);
     const active = await this.findActiveKitchen(params, cwd, pack.id, fingerprint);
     if (active) return active;
     const claim = await this.reserveKitchenRequest(params, cwd, pack.id, fingerprint);
@@ -432,11 +699,17 @@ export class TeamService {
       packId: pack.id,
       force: true,
       acceptanceCriteria: criteria,
+      roleProfiles: params.roleProfiles,
+      policy: params.policy,
       kitchen: {
         idempotencyKey: params.idempotencyKey,
         requestFingerprint: fingerprint,
         mode: "accompanied",
         workflowMode: params.workflowMode ?? "fixed",
+        executionMode: pack.id === "kitchen-single" ? "single" : "team",
+        classification,
+        spec: params.spec,
+        publication: params.publication,
         scheduleId: params.scheduleId,
         kind: params.kind ?? "feature",
         sourceAgentId: params.sourceAgentId,
@@ -464,12 +737,14 @@ export class TeamService {
     if (!(await stat(cwd)).isDirectory()) throw new Error("Kitchen cwd must be a directory");
     await this.validateKitchenSource(params, cwd);
     const profile = await readProjectProfile(cwd);
-    const packId = params.packId ?? profile.workflowPack ?? "kitchen";
+    const requestedPack = params.packId ?? profile.workflowPack ?? "kitchen";
+    if (params.executionMode === "single" && !["kitchen", "kitchen-single"].includes(requestedPack))
+      throw new Error("Single execution requires the kitchen-single pack");
+    if (params.executionMode === "team" && requestedPack === "kitchen-single")
+      throw new Error("Team execution cannot use the single pack");
+    const packId = params.executionMode === "single" ? "kitchen-single" : requestedPack;
     const pack = await this.options.packs.resolveFor(cwd, packId);
     if (!pack) throw new Error(`Workflow pack ${packId} is not installed`);
-    for (const role of Object.keys(profile.roles ?? {})) {
-      if (!pack.roles[role]) throw new Error(`Project profile names unknown role ${role}`);
-    }
     if (!this.options.controller.validateProvider)
       throw new Error("Kitchen provider preflight is not configured");
     const criteria = z
@@ -482,12 +757,18 @@ export class TeamService {
       model: params.model,
       cwd,
     });
-    for (const role of Object.values(profile.roles ?? {}))
-      await this.options.controller.validateProvider({
-        provider: role.provider,
-        model: role.model,
-        cwd,
-      });
+    await this.resolveRoleProfiles(
+      pack,
+      cwd,
+      {
+        provider: params.provider,
+        model: params.model,
+        mode: params.mode,
+        thinking: params.thinking,
+      },
+      profile.roles,
+      params.roleProfiles,
+    );
     const workspaceId = await this.kitchenWorkspace(params, cwd);
     return { cwd, pack, criteria, workspaceId };
   }
@@ -694,11 +975,13 @@ export class TeamService {
     teamId: string,
     action: "pause" | "resume" | "stop" | "cancel" | "accept",
     actorId: string,
+    approval?: { credential?: string; candidateCommit?: string },
   ): Promise<TeamState> {
     await this.store.commit(teamId, async (draft) => {
+      assertMutableTeam(draft.team);
       const runtime = (draft.team.runtime ??= runtimeState());
       if (action === "accept")
-        return { events: await this.acceptKitchen(draft, actorId), result: null };
+        return { events: await this.acceptKitchen(draft, actorId, approval), result: null };
       if (draft.team.status === "canceled" || draft.team.status === "done") {
         if (action === "cancel" && draft.team.status === "canceled")
           return { events: [], result: null };
@@ -754,10 +1037,59 @@ export class TeamService {
     return state;
   }
 
-  private async acceptKitchen(draft: TeamState, actorId: string): Promise<TeamEventDraft[]> {
-    if (draft.team.status === "done" && draft.team.kitchen?.acceptedCommit) return [];
-    const { root, commit } = acceptanceCandidate(draft);
-    if (!actorId.trim()) throw new Error("Human acceptance requires an actor");
+  async publish(teamId: string, credential: string, candidateCommit: string): Promise<TeamState> {
+    await this.store.commit(teamId, async (draft) => {
+      assertMutableTeam(draft.team);
+      const kitchen = draft.team.kitchen;
+      if (draft.team.status !== "done" || !kitchen?.acceptedCommit || !kitchen.approval)
+        throw new Error("Publication requires a verified, operator-approved accepted mission");
+      verifyOperatorApproval({
+        configuredCredential: await this.options.operatorCredential?.(),
+        suppliedCredential: credential,
+        requestedCommit: candidateCommit,
+        candidateCommit: kitchen.acceptedCommit,
+        now: this.now(),
+      });
+      if (!kitchen.publication?.enabled)
+        throw new Error("PR publication has not been explicitly enabled for this mission");
+      if (kitchen.published) return { events: [], result: null };
+      if (!this.options.publicationCli)
+        throw new Error("Configure a trusted publication CLI on this host before publishing");
+      const root = draft.items[draft.team.rootItemId]!;
+      const verifier = draft.bindings[root.bindings.verifier ?? ""];
+      const agent = verifier ? await this.options.controller.get(verifier.agentId) : null;
+      if (!agent) throw new Error("Verified publication checkout is unavailable");
+      await this.assertVerifiedCheckout(agent.cwd, candidateCommit);
+      const url = await publishCandidate(
+        agent.cwd,
+        candidateCommit,
+        kitchen.publication,
+        this.options.publicationCli,
+        this.options.publicationRunner,
+      );
+      kitchen.published = { commit: candidateCommit, url, at: this.now().toISOString() };
+      root.artifacts.push({ kind: "pr", ref: url, note: `Published verified ${candidateCommit}` });
+      return {
+        events: [
+          {
+            type: "publication.completed",
+            actor: RUNTIME,
+            workItemId: root.id,
+            text: `Published verified candidate ${url}`,
+            data: { commit: candidateCommit, url },
+          },
+        ],
+        result: null,
+      };
+    });
+    return (await this.store.get(teamId))!;
+  }
+
+  private async validateAcceptance(
+    draft: TeamState,
+    root: WorkItem,
+    commit: string,
+  ): Promise<void> {
     if (
       !root.acceptanceCriteria.length ||
       root.acceptanceCriteria.some((criterion) => !criterion.met || !criterion.evidence?.trim())
@@ -777,6 +1109,29 @@ export class TeamService {
     const record = verifier ? await this.options.controller.get(verifier.agentId) : null;
     if (!record) throw new Error("Final verification checkout is unavailable");
     await this.assertVerifiedCheckout(record.cwd, commit);
+    if (draft.team.policy) assertOutcomeJudged(draft.team.policy, root.checks ?? [], commit);
+    assertBrowserEvidence(this.options.independentChecks, root.checks ?? [], commit);
+    this.assertConfiguredCriteria(root, root.checks ?? [], commit);
+  }
+
+  private async acceptKitchen(
+    draft: TeamState,
+    actorId: string,
+    approval?: { credential?: string; candidateCommit?: string },
+  ): Promise<TeamEventDraft[]> {
+    if (draft.team.status === "done" && draft.team.kitchen?.acceptedCommit) {
+      verifyOperatorApproval({
+        configuredCredential: await this.options.operatorCredential?.(),
+        suppliedCredential: approval?.credential,
+        requestedCommit: approval?.candidateCommit,
+        candidateCommit: draft.team.kitchen.acceptedCommit,
+        now: this.now(),
+      });
+      return [];
+    }
+    const { root, commit } = acceptanceCandidate(draft);
+    if (!actorId.trim()) throw new Error("Human acceptance requires an actor");
+    await this.validateAcceptance(draft, root, commit);
     const pack = this.pack(draft.team);
     if (!pack.boards.root.phases.done || pack.boards.root.phases.done.kind !== "terminal")
       throw new Error("Workflow pack does not support human acceptance");
@@ -788,6 +1143,13 @@ export class TeamService {
     draft.team.kitchen!.acceptedAt = this.now().toISOString();
     draft.team.kitchen!.acceptedBy = actorId;
     draft.team.kitchen!.acceptedCommit = commit;
+    draft.team.kitchen!.approval = verifyOperatorApproval({
+      configuredCredential: await this.options.operatorCredential?.(),
+      suppliedCredential: approval?.credential,
+      requestedCommit: approval?.candidateCommit,
+      candidateCommit: commit,
+      now: this.now(),
+    });
     events.push({
       type: "team.accepted",
       actor,
@@ -870,6 +1232,7 @@ export class TeamService {
 
   async message(teamId: string, text: string, actor: Actor): Promise<void> {
     const bossId = await this.store.commit(teamId, (draft) => {
+      assertMutableTeam(draft.team);
       if (["done", "canceled"].includes(draft.team.status)) throw new Error("This team is closed");
       const events: TeamEventDraft[] = [{ type: "human.message", actor, text }];
       for (const item of Object.values(draft.items)) {
@@ -916,7 +1279,15 @@ export class TeamService {
           !(decision.status === "pending" && decision.payload.retry === true))
       )
         throw new Error("Only failed or waiting retry decisions can be retried");
+      assertMutableTeam(draft.team);
       if (["done", "canceled"].includes(draft.team.status)) throw new Error("This team is closed");
+      if (
+        typeof decision.payload.routingResetAt === "string" &&
+        Date.parse(decision.payload.routingResetAt) > this.now().getTime()
+      )
+        throw new Error(
+          `Host routing is waiting until ${decision.payload.routingResetAt}; retry after the reported reset`,
+        );
       const item = draft.items[decision.workItemId];
       if (!item) throw new Error("Work item missing");
       const events: TeamEventDraft[] = [];
@@ -966,6 +1337,7 @@ export class TeamService {
       return;
     }
     await this.store.commit(teamId, (draft) => {
+      assertMutableTeam(draft.team);
       if (["done", "canceled"].includes(draft.team.status)) throw new Error("This team is closed");
       draft.team.status = status;
       if (status === "active") draft.team.pausedReason = undefined;
@@ -996,19 +1368,43 @@ export class TeamService {
     const caller = await this.resolveCaller(agentId);
     if (!caller) throw new ReportRejectedError("This session is not seated in a team");
     const team = await this.store.get(caller.teamId);
+    if (team) assertMutableTeam(team.team);
     const role = team ? this.pack(team.team).roles[caller.binding.role] : undefined;
-    await this.verifyReportCheckout(
+    const checks = await this.verifyReportCheckout(
       agentId,
       team,
       team ? this.pack(team.team).roles[caller.binding.role] : undefined,
       payload,
     );
+    if (checks.length) {
+      await this.store.commit(caller.teamId, (draft) => {
+        const item = draft.items[caller.binding.workItemId];
+        if (item) item.checks = checks;
+        return {
+          events: [
+            {
+              type: "evidence.checked",
+              actor: RUNTIME,
+              workItemId: caller.binding.workItemId,
+              text: checks.every((check) => check.passed)
+                ? "Independent checks passed"
+                : "Independent checks failed",
+              data: { checks },
+            },
+          ],
+          result: null,
+        };
+      });
+      if (checks.some((check) => !check.passed))
+        throw new ReportRejectedError("Independent evidence or protected-file verification failed");
+    }
     const branch =
       role?.workspace === "own-worktree"
         ? await currentBranch((await this.options.controller.get(agentId))?.cwd ?? "")
         : undefined;
     try {
       const result = await this.store.commit(caller.teamId, (draft) => {
+        assertMutableTeam(draft.team);
         const binding = draft.bindings[caller.binding.id]!;
         const events: TeamEventDraft[] = [];
         const target = draft.items[binding.workItemId];
@@ -1021,7 +1417,7 @@ export class TeamService {
           if (draft.team.kitchen?.workflowMode !== "self-organizing")
             throw new ReportRejectedError("Work requests require a self-organizing Kitchen");
           for (const input of workRequests)
-            expandWork(draft, this.pack(draft.team), binding, input, events);
+            expandWork(draft, this.policyPack(draft.team), binding, input, events);
         }
         chargeBinding(draft, binding, this.now().getTime());
         const item = applyReport(draft, this.pack(draft.team), binding, payload, events);
@@ -1055,32 +1451,167 @@ export class TeamService {
     state: TeamState | null,
     role: Role | undefined,
     payload: TeamReportPayload,
-  ): Promise<void> {
+  ): Promise<EvidenceResult[]> {
     if (
-      state &&
-      this.pack(state.team).requireVerification &&
-      role?.id === "verifier" &&
-      payload.outcome === "pass"
-    ) {
-      const record = await this.options.controller.get(agentId);
-      if (!record) throw new ReportRejectedError("Verifier session is unavailable");
-      const commits = payload.artifacts?.filter((artifact) => artifact.kind === "commit") ?? [];
-      if (commits.length !== 1)
-        throw new ReportRejectedError("Verification requires exactly one commit artifact");
-      await this.assertVerifiedCheckout(record.cwd, commits[0]!.ref);
+      !state ||
+      !this.pack(state.team).requireVerification ||
+      role?.id !== "verifier" ||
+      payload.outcome !== "pass"
+    )
+      return [];
+    const record = await this.options.controller.get(agentId);
+    if (!record) throw new ReportRejectedError("Verifier session is unavailable");
+    const commits = payload.artifacts?.filter((artifact) => artifact.kind === "commit") ?? [];
+    if (commits.length !== 1)
+      throw new ReportRejectedError("Verification requires exactly one commit artifact");
+    const commit = commits[0]!.ref;
+    await this.assertVerifiedCheckout(record.cwd, commit);
+    const binding = findSeat(state, agentId);
+    const item = binding ? state.items[binding.workItemId] : undefined;
+    const proof = item?.pack.verifierProtection as
+      | { agentId: string; revision: number; snapshot: ProtectedSnapshot }
+      | undefined;
+    const checks: EvidenceResult[] = [];
+    try {
+      if (!proof || proof.agentId !== agentId || proof.revision !== item?.revision)
+        throw new Error("Verifier protection snapshot unavailable for this turn");
+      assertProtectedUnchanged(
+        proof.snapshot,
+        await (this.options.verificationSnapshot ?? captureTrackedFiles)(record.cwd),
+      );
+      checks.push({
+        id: "verifier-boundary",
+        kind: "protected-files",
+        passed: true,
+        summary: "Verifier left protected files, Git HEAD and worktree status unchanged",
+        checkedAt: this.now().toISOString(),
+        candidateCommit: commit,
+      });
+    } catch (error) {
+      checks.push({
+        id: "verifier-boundary",
+        kind: "protected-files",
+        passed: false,
+        summary: error instanceof Error ? error.message : "Verifier boundary could not be verified",
+        checkedAt: this.now().toISOString(),
+        candidateCommit: commit,
+      });
     }
+    return this.supplementEvidence(state, item, record.cwd, commit, payload, checks);
+  }
+
+  private assertConfiguredCriteria(item: WorkItem, checks: EvidenceResult[], commit: string): void {
+    if (this.options.independentChecks?.requireCriterionEvidence)
+      assertCriterionEvidence(
+        checks,
+        item.acceptanceCriteria.map((criterion) => criterion.id),
+        commit,
+      );
+  }
+
+  private async supplementEvidence(
+    state: TeamState,
+    item: WorkItem | undefined,
+    cwd: string,
+    commit: string,
+    payload: TeamReportPayload,
+    checks: EvidenceResult[],
+  ): Promise<EvidenceResult[]> {
+    if (this.options.independentChecks)
+      checks.push(...(await runIndependentChecks(cwd, commit, this.options.independentChecks)));
+    try {
+      assertBrowserEvidence(this.options.independentChecks, checks, commit);
+    } catch (browserError) {
+      checks.push({
+        id: "browser-evidence-required",
+        kind: "browser-artifact",
+        passed: false,
+        summary:
+          browserError instanceof Error ? browserError.message : "Browser evidence unavailable",
+        candidateCommit: commit,
+        checkedAt: this.now().toISOString(),
+      });
+    }
+    try {
+      if (item) this.assertConfiguredCriteria(item, checks, commit);
+    } catch (error) {
+      checks.push({
+        id: "criterion-evidence-required",
+        kind: "command",
+        passed: false,
+        summary: error instanceof Error ? error.message : "Criterion evidence unavailable",
+        candidateCommit: commit,
+        checkedAt: this.now().toISOString(),
+      });
+    }
+    if (state.team.policy?.requireOutcomeJudge) {
+      if (this.options.decisionSource && checks.every((check) => check.passed)) {
+        const judged = await this.options.decisionSource.judge({
+          cwd: cwd,
+          objective: state.team.objective,
+          criteria: item?.acceptanceCriteria,
+          candidateCommit: commit,
+          checks,
+          report: payload,
+        });
+        checks.push({
+          id: "system-one-outcome",
+          kind: "judge",
+          passed: judged.verdict === "pass",
+          summary: `${judged.source}/${judged.model}: ${judged.verdict}; ${judged.reason}; confidence ${judged.confidence}; latency ${judged.latencyMs}ms`,
+          candidateCommit: commit,
+          checkedAt: this.now().toISOString(),
+        });
+      }
+      try {
+        assertOutcomeJudged(state.team.policy, checks, commit);
+      } catch (judgeError) {
+        checks.push({
+          id: "outcome-judge-required",
+          kind: "judge",
+          passed: false,
+          summary: judgeError instanceof Error ? judgeError.message : "Outcome judge unavailable",
+          candidateCommit: commit,
+          checkedAt: this.now().toISOString(),
+        });
+      }
+    }
+    return checks;
+  }
+
+  private async protectVerifier(
+    state: TeamState,
+    item: WorkItem,
+    role: Role,
+    agentId: string,
+    cwd: string,
+  ): Promise<void> {
+    if (!this.pack(state.team).requireVerification || role.id !== "verifier") return;
+    const existing = item.pack.verifierProtection as
+      | { agentId: string; revision: number }
+      | undefined;
+    if (existing?.agentId === agentId && existing.revision === item.revision) return;
+    const snapshot = await (this.options.verificationSnapshot ?? captureTrackedFiles)(cwd);
+    await this.store.commit(state.team.id, (draft) => {
+      const target = draft.items[item.id];
+      if (!target || target.revision !== item.revision)
+        throw new Error("Verifier phase changed before protected snapshot was saved");
+      target.pack.verifierProtection = { agentId, revision: item.revision, snapshot };
+      return { events: [], result: null };
+    });
   }
 
   async requestWork(agentId: string, input: WorkRequestInput): Promise<string> {
     const caller = await this.resolveCaller(agentId);
     if (!caller) throw new ReportRejectedError("This session is not seated in a team");
     return this.store.commit(caller.teamId, (draft) => {
+      assertMutableTeam(draft.team);
       const events: TeamEventDraft[] = [];
       if (draft.team.kitchen?.workflowMode !== "self-organizing")
         throw new ReportRejectedError("Work requests require a self-organizing Kitchen");
       const child = expandWork(
         draft,
-        this.pack(draft.team),
+        this.policyPack(draft.team),
         draft.bindings[caller.binding.id]!,
         input,
         events,
@@ -1096,6 +1627,7 @@ export class TeamService {
     const caller = await this.resolveCaller(agentId);
     if (!caller) throw new ReportRejectedError("This session is not seated in a team");
     return this.store.commit(caller.teamId, (draft) => {
+      assertMutableTeam(draft.team);
       const events: TeamEventDraft[] = [];
       const created = planItems(
         draft,
@@ -1118,8 +1650,18 @@ export class TeamService {
     decisionId?: string,
     validationError?: string,
   ): Promise<void> {
+    const before = await this.store.get(teamId);
+    if (
+      !before ||
+      before.team.importedFrom?.readOnly ||
+      ["done", "canceled"].includes(before.team.status)
+    )
+      return;
+    const agent = await this.options.controller.get(agentId);
     await this.store.commit(teamId, async (draft) => {
       const events: TeamEventDraft[] = [];
+      if (draft.team.status === "done" || draft.team.status === "canceled")
+        return { events, result: null };
       if (await this.options.controller.isRunning(agentId)) return { events, result: null };
       const binding = findSeat(draft, agentId, decisionId);
       if (
@@ -1131,7 +1673,26 @@ export class TeamService {
       if (!item) return { events, result: null };
       chargeBinding(draft, binding, this.now().getTime());
       binding.lastEventAt = this.now().toISOString();
-      if (errored && binding.errors < MAX_ERROR_RETRIES) {
+      const reset = routingResetAt(agent, this.now().getTime());
+      if (reset && binding.errors < MAX_ERROR_RETRIES) {
+        binding.errors += 1;
+        binding.turn = "idle";
+        const retry = addDecision(
+          draft,
+          item,
+          "message-role",
+          { bindingId: binding.id, retry: true, routingResetAt: reset },
+          `routing-reset:${binding.id}:${item.revision}:${reset}`,
+        );
+        retry.availableAt = reset;
+        events.push({
+          type: "health.routing-wait",
+          actor: RUNTIME,
+          workItemId: item.id,
+          text: `${binding.role}: ${agent!.routingNotice!.reason}; retry after the host's reported reset ${reset}`,
+          data: { routingNotice: agent!.routingNotice },
+        });
+      } else if (errored && binding.errors < MAX_ERROR_RETRIES) {
         binding.errors += 1;
         binding.turn = "idle";
         const decision = addDecision(
@@ -1206,7 +1767,8 @@ export class TeamService {
       for (const teamId of await this.store.listIds()) {
         const state = await this.store.get(teamId);
         if (!state) continue;
-        await this.syncKitchenBoss(state.team);
+        if (state.team.status === "active" || state.team.status === "paused")
+          await this.syncKitchenBoss(state.team);
         if (await this.updateRuntime(teamId)) {
           const latest = await this.store.get(teamId);
           if (latest) await this.syncKitchenBoss(latest.team);
@@ -1372,67 +1934,85 @@ export class TeamService {
     return [{ type: "team.done", actor: RUNTIME, workItemId: root.id, text: "Team finished" }];
   }
 
+  private async messageRole(
+    state: TeamState,
+    pack: WorkflowPack,
+    item: WorkItem,
+    decision: Decision,
+  ): Promise<(draft: TeamState) => TeamEventDraft[]> {
+    const binding = state.bindings[decision.payload.bindingId as string];
+    if (!binding || binding.status !== "active") return () => [];
+    const role = pack.roles[binding.role]!;
+    let text = await this.workPacket(state, pack, item, role);
+    if (typeof decision.payload.note === "string") {
+      text = `The boss answered: ${decision.payload.note}\n\n${text}`;
+    } else if (decision.payload.nudge) {
+      const feedback =
+        typeof decision.payload.validationError === "string"
+          ? `\nValidation errors:\n${decision.payload.validationError.slice(0, 800)}`
+          : "";
+      text = `Your final factory-report JSON block was missing or rejected.${feedback}\nCorrect the report once, using the exact field types below. Do not repeat completed implementation work.\n\n${text}`;
+    } else if (decision.payload.retry) {
+      text = `Your last turn stopped with a provider error. Continue where you left off.\n\n${text}`;
+    } else if (decision.payload.resume) {
+      text = `The Paseo host restarted while you were working. Continue where you left off.\n\n${text}`;
+    }
+    const record = await this.validateRoleCheckout(state, pack, item, role, binding.agentId);
+    if (role.canEdit && record) await this.integrateDependencies(state, pack, item, record.cwd);
+    const allowed = await this.store.commit(state.team.id, (draft) => {
+      const seat = draft.bindings[binding.id];
+      if (
+        draft.team.status !== "active" ||
+        !seat ||
+        seat.status !== "active" ||
+        draft.decisions[decision.id]?.status !== "leased"
+      )
+        return { events: [], result: false };
+      seat.activeStartedAt = this.now().toISOString();
+      return { events: [], result: true };
+    });
+    if (!allowed) return () => [];
+    await this.protectVerifier(state, item, role, binding.agentId, record!.cwd);
+    await this.options.controller.send(binding.agentId, text);
+    return (draft) => {
+      const b = draft.bindings[binding.id];
+      if (b?.status === "active") {
+        b.turn = "running";
+        b.lastEventAt = this.now().toISOString();
+      }
+      return decision.payload.nudge || decision.payload.resume
+        ? []
+        : [
+            {
+              type: "role.resumed",
+              actor: { type: "role", id: binding.role },
+              workItemId: item.id,
+              text: `${role.title} picks up ${item.title} again`,
+            },
+          ];
+    };
+  }
+
   private async execute(
     state: TeamState,
     decision: Decision,
   ): Promise<(draft: TeamState) => TeamEventDraft[]> {
     const pack = this.pack(state.team);
     const item = state.items[decision.workItemId]!;
+    assertMutableTeam(state.team);
+    if (
+      state.team.policy?.maxChainSteps !== undefined &&
+      ["start-role", "message-role", "invoke-pack-action"].includes(decision.kind)
+    )
+      assertPolicyAllows(
+        { maxChainSteps: state.team.policy.maxChainSteps },
+        await this.policyObservation(state, decision.id),
+      );
     switch (decision.kind) {
       case "start-role":
         return this.startRole(state, pack, item, decision);
-      case "message-role": {
-        const binding = state.bindings[decision.payload.bindingId as string];
-        if (!binding || binding.status !== "active") return () => [];
-        const role = pack.roles[binding.role]!;
-        let text = await this.workPacket(state, pack, item, role);
-        if (typeof decision.payload.note === "string") {
-          text = `The boss answered: ${decision.payload.note}\n\n${text}`;
-        } else if (decision.payload.nudge) {
-          const feedback =
-            typeof decision.payload.validationError === "string"
-              ? `\nValidation errors:\n${decision.payload.validationError.slice(0, 800)}`
-              : "";
-          text = `Your final factory-report JSON block was missing or rejected.${feedback}\nCorrect the report once, using the exact field types below. Do not repeat completed implementation work.\n\n${text}`;
-        } else if (decision.payload.retry) {
-          text = `Your last turn stopped with a provider error. Continue where you left off.\n\n${text}`;
-        } else if (decision.payload.resume) {
-          text = `The Paseo host restarted while you were working. Continue where you left off.\n\n${text}`;
-        }
-        const record = await this.validateRoleCheckout(state, pack, item, role, binding.agentId);
-        if (role.canEdit && record) await this.integrateDependencies(state, pack, item, record.cwd);
-        const allowed = await this.store.commit(state.team.id, (draft) => {
-          const seat = draft.bindings[binding.id];
-          if (
-            draft.team.status !== "active" ||
-            !seat ||
-            seat.status !== "active" ||
-            draft.decisions[decision.id]?.status !== "leased"
-          )
-            return { events: [], result: false };
-          seat.activeStartedAt = this.now().toISOString();
-          return { events: [], result: true };
-        });
-        if (!allowed) return () => [];
-        await this.options.controller.send(binding.agentId, text);
-        return (draft) => {
-          const b = draft.bindings[binding.id];
-          if (b?.status === "active") {
-            b.turn = "running";
-            b.lastEventAt = this.now().toISOString();
-          }
-          return decision.payload.nudge || decision.payload.resume
-            ? []
-            : [
-                {
-                  type: "role.resumed",
-                  actor: { type: "role", id: binding.role },
-                  workItemId: item.id,
-                  text: `${role.title} picks up ${item.title} again`,
-                },
-              ];
-        };
-      }
+      case "message-role":
+        return this.messageRole(state, pack, item, decision);
       case "notify-human": {
         const text = String(decision.payload.text ?? "");
         await this.options.controller.send(
@@ -1470,9 +2050,12 @@ export class TeamService {
     const roleId = String(decision.payload.role);
     const role = pack.roles[roleId];
     if (!role) throw new Error(`Pack ${pack.id} has no role ${roleId}`);
-    const profile = state.team.roleProfiles[roleId];
+    const profile = this.executedRoleProfile(state, item, roleId);
     if (!profile) throw new Error(`No harness bound for role ${roleId}`);
     const profileName = profile.model ? `${profile.provider}/${profile.model}` : profile.provider;
+    let agentId = await this.findAgentForDecision(decision.id);
+    if (!agentId && state.team.policy)
+      assertPolicyAllows(state.team.policy, await this.policyObservation(state, decision.id));
 
     const bindingId = await this.store.commit(state.team.id, (draft) => {
       const target = draft.items[item.id];
@@ -1500,6 +2083,7 @@ export class TeamService {
         decisionId: decision.id,
         agentId: "",
         profile: profileName,
+        executedProfile: structuredClone(profile),
         status: "active",
         turn: "starting",
         nudges: 0,
@@ -1515,8 +2099,9 @@ export class TeamService {
     });
     if (!bindingId) return () => [];
 
-    let agentId = await this.findAgentForDecision(decision.id);
     if (!agentId) {
+      if (this.options.controller.validateProvider)
+        await this.options.controller.validateProvider({ ...profile, cwd: state.team.cwd });
       const key = String(item.pack.key ?? item.id)
         .replace(/[^A-Za-z0-9-]/g, "-")
         .toLowerCase();
@@ -1555,6 +2140,7 @@ export class TeamService {
       const latest = await this.store.get(state.team.id);
       if (latest?.team.status !== "active" || latest.decisions[decision.id]?.status !== "leased")
         return () => [];
+      await this.protectVerifier(state, item, role, agentId, record!.cwd);
       await this.options.controller.send(agentId, await this.workPacket(state, pack, item, role));
     }
     const finalAgentId = agentId;
@@ -1671,6 +2257,9 @@ export class TeamService {
       `## Team goal`,
       state.team.objective,
     ];
+    if (state.team.kitchen?.spec)
+      lines.push("", "## Mission specification", state.team.kitchen.spec);
+    this.appendRoleWorkflow(state, item, role.id, lines);
     if (item.board === "item") lines.push("", "## This work item", item.objective);
     if (item.acceptanceCriteria.length) {
       lines.push(
@@ -1859,6 +2448,9 @@ export class TeamService {
       (agent) => agent.labels?.[TEAM_LABEL] === teamId && agent.labels?.[TEAM_ROLE_LABEL],
     );
     const observed = agents.filter((agent) => agent.usageTotals !== undefined);
+    const policy = before.team.policy
+      ? evaluatePolicy(before.team.policy, await this.policyObservation(before))
+      : [];
     const limit = await this.store.commit(teamId, (draft) => {
       if (draft.team.status === "done" || draft.team.status === "canceled")
         return { events: [], result: false };
@@ -1872,7 +2464,22 @@ export class TeamService {
             total + agent.usageTotals!.inputTokens + agent.usageTotals!.outputTokens,
           0,
         );
-      const reason = runtimeLimitReason(draft);
+      const livePolicy = draft.team.policy
+        ? evaluatePolicy(draft.team.policy, {
+            activeMs: runtime.usage.activeMs,
+            roleActiveMs: runtime.usage.roleActiveMs,
+          }).filter(
+            (failure) =>
+              failure.dimension === "totalActiveMs" || failure.dimension === "roleActiveMs",
+          )
+        : [];
+      const reason =
+        [...policy, ...livePolicy].find(
+          (failure) =>
+            failure.dimension !== "maxAgentStarts" &&
+            failure.dimension !== "maxDelegationDepth" &&
+            failure.dimension !== "maxChainSteps",
+        )?.message ?? runtimeLimitReason(draft);
       if (!reason) return { events: [], result: false };
       if (runtime.limitReason) return { events: [], result: true };
       runtime.limitReason = reason;
@@ -2045,17 +2652,7 @@ async function currentBranch(cwd: string): Promise<string | undefined> {
 const ProjectProfileSchema = z
   .object({
     workflowPack: z.string().min(1).optional(),
-    roles: z
-      .record(
-        z.string(),
-        z.object({
-          provider: z.string().min(1),
-          model: z.string().min(1).optional(),
-          thinking: z.string().min(1).optional(),
-          mode: z.string().min(1).optional(),
-        }),
-      )
-      .optional(),
+    roles: z.record(z.string(), RoleProfileOverrideSchema).optional(),
   })
   .passthrough();
 
@@ -2066,8 +2663,13 @@ export async function readProjectProfile(
   try {
     text = await readFile(join(cwd, ".agent-factory", "project.json"), "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
-    throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    try {
+      text = await readFile(join(cwd, ".pandaos", "project.json"), "utf8");
+    } catch (legacyError) {
+      if ((legacyError as NodeJS.ErrnoException).code === "ENOENT") return {};
+      throw legacyError;
+    }
   }
   return ProjectProfileSchema.parse(JSON.parse(text));
 }
@@ -2108,6 +2710,11 @@ function requestFingerprint(input: StartKitchenInput): string {
         kind: input.kind ?? "feature",
         sourceAgentId: input.sourceAgentId,
         workspaceId: input.workspaceId,
+        roleProfiles: input.roleProfiles,
+        policy: input.policy,
+        executionMode: input.executionMode,
+        spec: input.spec,
+        publication: input.publication,
       }),
     )
     .digest("hex");
@@ -2182,4 +2789,35 @@ function appendVerifiedChildren(state: TeamState, item: WorkItem, lines: string[
       );
     for (const artifact of child.artifacts) lines.push(`  - ${artifact.kind}: ${artifact.ref}`);
   }
+}
+
+function routingResetAt(agent: FactoryAgent | null, now: number): string | undefined {
+  const notice = agent?.routingNotice;
+  if (!notice || !["waiting", "exhausted", "retrying"].includes(notice.status) || !notice.resetsAt)
+    return undefined;
+  const reset = Date.parse(notice.resetsAt);
+  if (!Number.isFinite(reset) || reset <= now) return undefined;
+  return new Date(reset + 1_000).toISOString();
+}
+
+function assertMutableTeam(team: Team): void {
+  if (team.importedFrom?.readOnly)
+    throw new Error(
+      "Imported native jobs are read-only; they cannot be resumed or changed by this plugin",
+    );
+}
+
+function assertBrowserEvidence(
+  options: IndependentCheckOptions | undefined,
+  checks: EvidenceResult[],
+  commit: string,
+): void {
+  if (
+    options?.requireBrowserEvidence &&
+    !checks.some(
+      (check) =>
+        check.kind === "browser-artifact" && check.passed && check.candidateCommit === commit,
+    )
+  )
+    throw new Error("Configured browser evidence is required for the current verified candidate");
 }

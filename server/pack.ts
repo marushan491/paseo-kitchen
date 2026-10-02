@@ -419,6 +419,62 @@ export const kitchenGardenerPack = analysisPack(
   "Inspect the logbook for repeated failures, obsolete or overlapping work, missing evidence and recurring manual repair. Suggest at most three weekly maintenance proposals with explicit scope, source references and approval requirements. Compare with previous analytical reports before repeating a proposal; if their content is unavailable, state that deduplication is unconfirmed.",
 );
 
+export const kitchenSinglePack: WorkflowPack = {
+  ...kitchenPack,
+  id: "kitchen-single",
+  title: "Kitchen · Single implementer",
+  roles: {
+    integrator: {
+      ...kitchenPack.roles.integrator!,
+      title: "Implementer",
+      instructions:
+        "Implement the complete mission in this isolated worktree. Keep the source checkout unchanged. Read the specification, meet every acceptance criterion, run the applicable checks and commit the result. Report done with one full actual HEAD commit artifact. Independent review and verification follow. " +
+        REPORT_RULE,
+    },
+    reviewer: kitchenPack.roles.reviewer!,
+    verifier: kitchenPack.roles.verifier!,
+  },
+  maxDelegatedItems: 0,
+  maxDelegationDepth: 0,
+  boards: {
+    item: {
+      initialPhase: "ready",
+      phases: {
+        ready: { title: "No delegated work", kind: "resting", next: "canceled" },
+        canceled: { title: "Canceled", kind: "terminal" },
+      },
+    },
+    root: {
+      initialPhase: "intake",
+      phases: {
+        intake: { title: "Intake", kind: "resting", next: "implement" },
+        implement: {
+          title: "Implement",
+          kind: "working",
+          role: "integrator",
+          outcomes: { done: "review" },
+        },
+        review: {
+          title: "Editable review",
+          kind: "working",
+          role: "reviewer",
+          outcomes: { approve: "verify", changes: "implement" },
+        },
+        verify: {
+          title: "Independent verification",
+          kind: "working",
+          role: "verifier",
+          outcomes: { pass: "ready-for-human", fail: "implement" },
+        },
+        blocked: { title: "Needs you", kind: "resting" },
+        "ready-for-human": { title: "Ready for human", kind: "terminal" },
+        done: { title: "Accepted", kind: "terminal" },
+        canceled: { title: "Canceled", kind: "terminal" },
+      },
+    },
+  },
+};
+
 export class PackRegistry {
   private readonly packs = new Map<string, WorkflowPack>();
 
@@ -426,6 +482,7 @@ export class PackRegistry {
     packs: WorkflowPack[] = [
       softwareBasicPack,
       kitchenPack,
+      kitchenSinglePack,
       kitchenInsightsPack,
       kitchenGardenerPack,
     ],
@@ -453,8 +510,9 @@ export class PackRegistry {
     let entries: string[];
     try {
       entries = await readdir(dir);
-    } catch {
-      return { loaded, failed };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { loaded, failed };
+      throw error;
     }
     for (const entry of entries) {
       const path = join(dir, entry, "pack.mjs");

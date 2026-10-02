@@ -15,17 +15,37 @@ import {
   FactoryPackSchema,
   TEAM_ROLE_LABEL,
   type StartKitchenInput,
+  type RoleProfileOverride,
 } from "../shared/factory-contracts.js";
 import { Action, Field, useFactoryStyles } from "./ui.js";
 import { listFactoryAgents } from "./agents.js";
 import { parseCriteria } from "./kitchen-model.js";
 import { KitchenSchedules } from "./schedules.js";
 import { TargetSelection, useKitchenTarget } from "./target.js";
+import { RoleAssignments } from "./workflows.js";
+import { Choice } from "./choice.js";
+import { PolicyFields, parsePolicyDraft, type PolicyDraft } from "./policy.js";
+import { PublicationFields, initialPublication, parsePublication } from "./publication.js";
 import { TeamView } from "./team-view.js";
 
+const formStyle = { flex: 1, maxWidth: 820, gap: 16 };
+const emptyRoles = {};
+const executionOptions = [
+  { id: "auto", title: "Auto · classify with the configured decision provider" },
+  { id: "team", title: "Team · planning and bounded delegation" },
+  { id: "single", title: "Single · implement, review and verify one task" },
+];
+function schedulesLabel(show: boolean) {
+  return show ? "Show Kitchen run" : "Kitchen triggers";
+}
 const emptyPacks: z.infer<typeof FactoryPackSchema>[] = [];
 
-type Props = PluginSurfaceProps & Partial<Pick<PluginAgentPanelProps, "workspaceId" | "agentId">>;
+type Props = PluginSurfaceProps &
+  Partial<Pick<PluginAgentPanelProps, "workspaceId" | "agentId">> & {
+    createNew?: boolean;
+    selectedTeamId?: string;
+    onCreated?(teamId: string): void;
+  };
 
 export function Factory(props: Props) {
   const { theme, workspaceId, agentId } = props;
@@ -50,7 +70,9 @@ export function Factory(props: Props) {
   }, [paseo, cache]);
   const [showSchedules, setShowSchedules] = useState(false);
   const toggleSchedules = useCallback(() => setShowSchedules((value) => !value), []);
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = useState(props.selectedTeamId || "");
+  const [creating, setCreating] = useState(Boolean(props.createNew));
+  const [roleProfiles, setRoleProfiles] = useState<Record<string, RoleProfileOverride>>({});
   const [title, setTitle] = useState("");
   const [objective, setObjective] = useState("");
   const [criteria, setCriteria] = useState("");
@@ -58,9 +80,19 @@ export function Factory(props: Props) {
   const [source, setSource] = useState(agentId || "");
   const [kind, setKind] = useState<"feature" | "bug" | "maintenance">("feature");
   const [workflowMode, setWorkflowMode] = useState<"fixed" | "self-organizing">("fixed");
+  const [publicationDraft, setPublicationDraft] = useState(initialPublication);
+  const publication = useMemo(() => parsePublication(publicationDraft), [publicationDraft]);
+  const [spec, setSpec] = useState("");
+  const [executionMode, setExecutionMode] = useState<"auto" | "single" | "team">("auto");
+  const [policyDraft, setPolicyDraft] = useState<PolicyDraft>({});
+  const policy = useMemo(() => parsePolicyDraft(policyDraft), [policyDraft]);
   const [packId, setPackId] = useState("kitchen");
   const attempt = useRef<{ fingerprint: string; key: string } | null>(null);
-  const teams = useQuery({ queryKey: ["factory", "teams"], queryFn: () => list({}) });
+  const teams = useQuery({
+    queryKey: ["factory", "teams"],
+    queryFn: () => list({}),
+    refetchInterval: 4000,
+  });
   const packs = useQuery({ queryKey: ["factory", "packs"], queryFn: () => packsRpc({}) });
   const agents = useQuery({
     queryKey: ["factory", "agents", workspaceId],
@@ -82,11 +114,13 @@ export function Factory(props: Props) {
     [agents.data, workspaceId],
   );
   const availablePacks = packs.data?.packs ?? emptyPacks;
-  const sourceAgent = eligible.find(({ agent }) => agent.id === source)?.agent;
-  const targetSelection = useKitchenTarget(
-    sourceAgent,
-    cwd || workspace.data?.workspaceDirectory || "",
+  const formPacks = useMemo(
+    () =>
+      executionMode === "single" ? availablePacks.filter(singleCompatiblePack) : availablePacks,
+    [executionMode, availablePacks],
   );
+  const sourceAgent = eligible.find(({ agent }) => agent.id === source)?.agent;
+  const targetSelection = useKitchenTarget(sourceAgent, targetDirectory(cwd, workspace.data));
   const request = useMemo<Omit<StartKitchenInput, "idempotencyKey">>(
     () => ({
       ...targetSelection.target,
@@ -96,10 +130,30 @@ export function Factory(props: Props) {
       kind,
       workflowMode,
       packId,
+      roleProfiles,
+      spec: optionalText(spec),
+      executionMode,
+      policy: policyValue(policy),
+      publication: resultValue(publication),
     }),
-    [targetSelection.target, title, objective, criteria, kind, workflowMode, packId],
+    [
+      targetSelection.target,
+      title,
+      objective,
+      criteria,
+      kind,
+      workflowMode,
+      packId,
+      roleProfiles,
+      spec,
+      executionMode,
+      policy,
+      publication,
+    ],
   );
-  const validRequest = validKitchenRequest(targetSelection.valid, request);
+  const validRequest =
+    validSettings(policy.success, publication.success) &&
+    validKitchenRequest(targetSelection.valid, request);
   const create = useMutation({
     mutationFn: () => {
       if (!validRequest)
@@ -117,12 +171,15 @@ export function Factory(props: Props) {
     },
     onSuccess: async (state) => {
       setSelected(state.team.id);
+      setCreating(false);
+      props.onCreated?.(state.team.id);
       await cache.invalidateQueries({ queryKey: ["factory"] });
     },
   });
   const openRun = useCallback((id: string) => {
     setSelected(id);
     setShowSchedules(false);
+    setCreating(false);
   }, []);
   const startKitchen = useCallback(() => create.mutate(), [create]);
   const freshRequest = useCallback(() => {
@@ -155,18 +212,23 @@ export function Factory(props: Props) {
       state.team.cwd === workspace.data?.workspaceDirectory ||
       state.team.kitchen?.sourceAgentId === agentId,
   );
+  const chooseExecution = useCallback((value: string) => {
+    setExecutionMode(value === "single" || value === "team" ? value : "auto");
+    if (value === "single") setPackId("kitchen");
+  }, []);
   const selectionVisible = visibleTeams?.some((state) => state.team.id === selected);
+  const canShowContent = !creating;
   const error = [teams.error, agents.error, packs.error, workspace.error, create.error].find(
     Boolean,
   );
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <View style={styles.row}>
-        <Text style={styles.title}>Kitchen</Text>
+        <Text style={styles.title}>Missions</Text>
         <Action theme={theme} title="Refresh Kitchen" value="refresh" onAction={refresh} />
         <Action
           theme={theme}
-          title={showSchedules ? "Show Kitchen run" : "Kitchen triggers"}
+          title={schedulesLabel(showSchedules)}
           value="triggers"
           onAction={toggleSchedules}
         />
@@ -180,61 +242,92 @@ export function Factory(props: Props) {
           {String(error)}
         </Text>
       ) : null}
-      <View style={styles.columns}>
-        <View style={styles.sidebar}>
-          <Text style={styles.heading}>Kitchen runs</Text>
-          {teams.isPending ? <Text style={styles.muted}>Loading runs…</Text> : null}
-          {visibleTeams?.map((state) => (
-            <Action
-              key={state.team.id}
+      <View style={creating ? styles.stack : styles.columns}>
+        {canShowContent ? (
+          <View style={styles.sidebar}>
+            <Text style={styles.heading}>Kitchen runs</Text>
+            {teams.isPending ? <Text style={styles.muted}>Loading runs…</Text> : null}
+            {visibleTeams?.map((state) => (
+              <Action
+                key={state.team.id}
+                theme={theme}
+                title={`${state.team.title} · ${state.team.status}`}
+                selected={selected === state.team.id}
+                value={state.team.id}
+                onAction={openRun}
+              />
+            ))}
+            {visibleTeams?.length === 0 ? (
+              <Text style={styles.muted}>No runs for this project yet.</Text>
+            ) : null}
+          </View>
+        ) : null}
+        {creating ? (
+          <View style={formStyle}>
+            <Field
               theme={theme}
-              title={`${state.team.title} · ${state.team.status}`}
-              value={state.team.id}
-              onAction={openRun}
+              label="Specification · optional"
+              value={spec}
+              onChange={setSpec}
+              multiline
             />
-          ))}
-          {visibleTeams?.length === 0 ? (
-            <Text style={styles.muted}>No runs for this project yet.</Text>
-          ) : null}
-          <KitchenStartForm
+            <Choice
+              {...props}
+              label="Execution mode"
+              value={executionMode}
+              options={executionOptions}
+              onChange={chooseExecution}
+            />
+            <PolicyFields {...props} value={policyDraft} onChange={setPolicyDraft} />
+            <PublicationFields {...props} value={publicationDraft} onChange={setPublicationDraft} />
+            <KitchenStartForm
+              {...props}
+              roleProfiles={roleProfiles}
+              onRoleProfiles={setRoleProfiles}
+              title={title}
+              objective={objective}
+              criteria={criteria}
+              cwd={cwd}
+              source={source}
+              kind={kind}
+              workflowMode={workflowMode}
+              packId={packId}
+              eligible={eligible}
+              packs={formPacks}
+              loadingAgents={agents.isPending}
+              pending={create.isPending}
+              success={create.isSuccess}
+              validSource={validSettings(
+                targetSelection.valid,
+                policy.success,
+                publication.success,
+              )}
+              targetSelection={targetSelection}
+              onProject={chooseProject}
+              onTitle={setTitle}
+              onObjective={setObjective}
+              onCriteria={setCriteria}
+              onCwd={setCwd}
+              onSource={chooseSource}
+              onKind={setKind}
+              onWorkflow={setWorkflowMode}
+              onPack={setPackId}
+              onStart={startKitchen}
+              onFresh={freshRequest}
+            />
+          </View>
+        ) : null}
+        {canShowContent ? (
+          <KitchenContent
             {...props}
-            title={title}
-            objective={objective}
-            criteria={criteria}
-            cwd={cwd}
-            source={source}
-            kind={kind}
-            workflowMode={workflowMode}
-            packId={packId}
-            eligible={eligible}
-            packs={availablePacks}
-            loadingAgents={agents.isPending}
-            pending={create.isPending}
-            success={create.isSuccess}
-            validSource={targetSelection.valid}
-            targetSelection={targetSelection}
-            onProject={chooseProject}
-            onTitle={setTitle}
-            onObjective={setObjective}
-            onCriteria={setCriteria}
-            onCwd={setCwd}
-            onSource={chooseSource}
-            onKind={setKind}
-            onWorkflow={setWorkflowMode}
-            onPack={setPackId}
-            onStart={startKitchen}
-            onFresh={freshRequest}
+            selected={selected}
+            selectionVisible={Boolean(selectionVisible)}
+            showSchedules={showSchedules}
+            request={request}
+            validRequest={validRequest}
+            onOpenRun={openRun}
           />
-        </View>
-        <KitchenContent
-          {...props}
-          selected={selected}
-          selectionVisible={Boolean(selectionVisible)}
-          showSchedules={showSchedules}
-          request={request}
-          validRequest={validRequest}
-          onOpenRun={openRun}
-        />
+        ) : null}
       </View>
     </ScrollView>
   );
@@ -242,6 +335,8 @@ export function Factory(props: Props) {
 
 function KitchenStartForm(
   props: Props & {
+    roleProfiles: Record<string, RoleProfileOverride>;
+    onRoleProfiles(value: Record<string, RoleProfileOverride>): void;
     title: string;
     objective: string;
     criteria: string;
@@ -300,10 +395,18 @@ function KitchenStartForm(
     onFresh,
   } = props;
   const styles = useFactoryStyles(props);
+  const sourceOptions = useMemo(
+    () =>
+      eligible.map(({ agent }) => ({
+        id: agent.id,
+        title: `${agent.title || agent.id} · ${agent.provider}`,
+      })),
+    [eligible],
+  );
   const selectedPack = packs.find((pack) => pack.id === packId);
   return (
     <View style={styles.card}>
-      <Text style={styles.heading}>Auftrag starten</Text>
+      <Text style={styles.heading}>New mission</Text>
       <Field theme={theme} label="Job title" value={title} onChange={onTitle} />
       <Field
         theme={theme}
@@ -319,22 +422,15 @@ function KitchenStartForm(
         onChange={onCriteria}
         multiline
       />
-      <Text style={styles.muted}>Source session · optional</Text>
-      <Action
-        theme={theme}
-        title={source ? "Start without source session" : "✓ Start without source session"}
-        value=""
-        onAction={onSource}
+      <Choice
+        {...props}
+        label="Source session · optional"
+        value={source}
+        onChange={onSource}
+        allowEmpty
+        emptyTitle="Start without source session"
+        options={sourceOptions}
       />
-      {eligible.map(({ agent }) => (
-        <Action
-          key={agent.id}
-          theme={theme}
-          title={`${source === agent.id ? "✓ " : ""}${agent.title || agent.id} · ${agent.provider}`}
-          value={agent.id}
-          onAction={onSource}
-        />
-      ))}
       {!loadingAgents && eligible.length === 0 ? (
         <Text style={styles.muted}>
           Choose a provider and project below to start without a source session.
@@ -392,8 +488,15 @@ function KitchenStartForm(
           onAction={onPack}
         />
       ))}
+      <RoleAssignments
+        {...props}
+        roles={selectedPack?.roles || selectedPack?.workflow.roles || emptyRoles}
+        value={props.roleProfiles}
+        onChange={props.onRoleProfiles}
+      />
       <Action
         theme={theme}
+        variant="primary"
         title={pending ? "Starting Kitchen…" : "Start Kitchen"}
         value="start"
         onAction={onStart}
@@ -451,10 +554,32 @@ function KitchenContent(
         <TeamView key={selected} {...props} teamId={selected} />
       ) : (
         <Text style={styles.muted}>
-          Select a Kitchen run to open Teamchat, Agent-Pool and Auftrag. Runs remain here
-          independently of native agent tabs.
+          Select a mission to inspect its agents, workflow, conversation and acceptance evidence.
+          Runs remain here independently of native agent tabs.
         </Text>
       )}
     </View>
   );
+}
+
+function optionalText(text: string) {
+  return text.trim() || undefined;
+}
+function policyValue(result: ReturnType<typeof parsePolicyDraft>) {
+  return result.success ? result.data : undefined;
+}
+
+function targetDirectory(cwd: string, workspace?: { workspaceDirectory?: string | null } | null) {
+  return cwd || workspace?.workspaceDirectory || "";
+}
+
+function validSettings(...flags: boolean[]) {
+  return flags.every(Boolean);
+}
+function resultValue<T>(result: { success: true; data: T } | { success: false }) {
+  return result.success ? result.data : undefined;
+}
+
+function singleCompatiblePack(pack: z.infer<typeof FactoryPackSchema>) {
+  return pack.id === "kitchen" || pack.id === "kitchen-single";
 }

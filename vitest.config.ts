@@ -9,5 +9,5 @@ export default defineConfig({
       ),
     },
   },
-  test: { include: ["server/*.test.ts", "client/*.test.ts"] },
+  test: { include: ["server/**/*.test.ts", "client/**/*.test.ts", "shared/**/*.test.ts"] },
 });

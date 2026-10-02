@@ -1,4 +1,9 @@
-import type { TeamEvent, TeamState } from "../shared/factory-contracts.js";
+import {
+  FactoryPolicySchema,
+  type FactoryPolicy,
+  type TeamEvent,
+  type TeamState,
+} from "../shared/factory-contracts.js";
 
 export function acceptanceProblem(state: TeamState): string | null {
   const root = state.items[state.team.rootItemId];
@@ -57,4 +62,15 @@ export function parseCriteria(text: string) {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line, index) => ({ id: `criterion-${index + 1}`, text: line }));
+}
+
+export type PolicyDraft = Partial<Record<keyof FactoryPolicy, string>>;
+export function parsePolicyDraft(draft: PolicyDraft) {
+  const values: Record<string, unknown> = Object.fromEntries(
+    Object.entries(draft)
+      .filter(([key, value]) => key !== "requireOutcomeJudge" && value?.trim())
+      .map(([key, value]) => [key, Number(value)]),
+  );
+  if (draft.requireOutcomeJudge === "required") values.requireOutcomeJudge = true;
+  return FactoryPolicySchema.safeParse(values);
 }

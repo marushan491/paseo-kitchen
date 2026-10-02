@@ -1,3 +1,4 @@
+import { readAgentRoutingNotice, type AgentRoutingNotice } from "../shared/agent-routing.js";
 import type { z } from "zod";
 import type { FactoryCompletionSchema } from "../shared/factory-contracts.js";
 import { parseFactoryCompletion } from "./completion.js";
@@ -8,6 +9,7 @@ import type { PaseoAgentCreateOptions } from "@getpaseo/client";
 import type { PaseoApi, PaseoAgent } from "@getpaseo/client";
 export interface FactoryAgent {
   id: string;
+  routingNotice?: AgentRoutingNotice;
   title?: string | null;
   workspaceId?: string | null;
   parentAgentId?: string | null;
@@ -74,6 +76,7 @@ export const factoryLogger: FactoryLogger = {
 function snapshot(agent: PaseoAgent): FactoryAgent {
   return {
     ...agent,
+    routingNotice: readAgentRoutingNotice(agent),
     parentAgentId: agent.labels?.["paseo.parent-agent-id"],
     running: agent.status === "running" || Boolean(agent.activeTurn),
   };

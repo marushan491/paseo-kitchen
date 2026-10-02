@@ -1,6 +1,7 @@
 import { appendFile, mkdir, open, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeJsonFileAtomic } from "./atomic-file.js";
+import { withStorageLock } from "./storage-lock.js";
 import { type TeamEvent, TeamEventSchema, type TeamState, TeamStateSchema } from "./types.js";
 
 export type TeamEventDraft = Omit<TeamEvent, "id" | "commit" | "at">;
@@ -14,7 +15,6 @@ export class StaleRevisionError extends Error {
 
 export class TeamStore {
   private readonly chains = new Map<string, Promise<unknown>>();
-  private readonly cache = new Map<string, TeamState>();
 
   constructor(private readonly dir: string) {}
 
@@ -26,7 +26,9 @@ export class TeamStore {
   async listIds(): Promise<string[]> {
     try {
       const entries = await readdir(this.dir, { withFileTypes: true });
-      return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+      return entries
+        .filter((e) => e.isDirectory() && /^team_[A-Za-z0-9_-]+$/.test(e.name))
+        .map((e) => e.name);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
@@ -34,8 +36,6 @@ export class TeamStore {
   }
 
   async get(teamId: string): Promise<TeamState | null> {
-    const cached = this.cache.get(teamId);
-    if (cached) return structuredClone(cached);
     let raw: string;
     try {
       raw = await readFile(join(this.teamDir(teamId), "state.json"), "utf8");
@@ -44,20 +44,15 @@ export class TeamStore {
       throw error;
     }
     const state = TeamStateSchema.parse(JSON.parse(raw));
-    await this.dropUncommittedEvents(teamId, state.commit);
-    this.cache.set(teamId, state);
     return structuredClone(state);
   }
 
   async events(teamId: string): Promise<TeamEvent[]> {
     try {
+      const state = await this.get(teamId);
+      if (!state) return [];
       const raw = await readFile(join(this.teamDir(teamId), "events.jsonl"), "utf8");
-      return raw
-        .split("\n")
-        .filter(Boolean)
-        .map((line, position) =>
-          TeamEventSchema.parse({ ...JSON.parse(line), id: `${teamId}:${position}` }),
-        );
+      return this.committedEvents(teamId, raw, state);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
@@ -65,8 +60,11 @@ export class TeamStore {
   }
 
   async create(state: TeamState, events: TeamEventDraft[]): Promise<void> {
-    await mkdir(this.teamDir(state.team.id), { recursive: true });
-    await this.write(state.team.id, { ...state, commit: 0 }, events);
+    await withStorageLock(`${this.teamDir(state.team.id)}.lock`, async () => {
+      if (await this.get(state.team.id)) throw new Error(`Team ${state.team.id} already exists`);
+      await mkdir(this.teamDir(state.team.id), { recursive: true });
+      await this.write(state.team.id, { ...state, commit: 0, eventCount: 0 }, events);
+    });
   }
 
   commit<T>(
@@ -78,19 +76,25 @@ export class TeamStore {
     const previous = this.chains.get(teamId) ?? Promise.resolve();
     const next = previous
       .catch(() => {})
-      .then(async () => {
-        const draft = await this.get(teamId);
-        if (!draft) throw new Error(`Team ${teamId} not found`);
-        const { events, result } = await mutate(draft);
-        await this.write(teamId, draft, events);
-        return result;
-      });
+      .then(() =>
+        withStorageLock(`${this.teamDir(teamId)}.lock`, async () => {
+          const draft = await this.get(teamId);
+          if (!draft) throw new Error(`Team ${teamId} not found`);
+          await this.dropUncommittedEvents(teamId, draft);
+          const before = JSON.stringify(draft);
+          const { events, result } = await mutate(draft);
+          if (events.length || JSON.stringify(draft) !== before)
+            await this.write(teamId, draft, events);
+          return result;
+        }),
+      );
     this.chains.set(teamId, next);
     return next;
   }
 
   private async write(teamId: string, state: TeamState, events: TeamEventDraft[]): Promise<void> {
     const commit = state.commit + 1;
+    const eventCount = state.eventCount ?? (await this.events(teamId)).length;
     const at = new Date().toISOString();
     if (events.length > 0) {
       const lines = events.map((e) => JSON.stringify({ ...e, commit, at })).join("\n") + "\n";
@@ -103,18 +107,38 @@ export class TeamStore {
         await handle.close();
       }
     }
-    const next = { ...state, commit };
+    const next = { ...state, commit, eventCount: eventCount + events.length };
     await writeJsonFileAtomic(join(this.teamDir(teamId), "state.json"), next);
-    this.cache.set(teamId, structuredClone(next));
   }
 
-  private async dropUncommittedEvents(teamId: string, commit: number): Promise<void> {
-    const events = await this.events(teamId);
-    const kept = events.filter((e) => e.commit <= commit);
-    if (kept.length === events.length) return;
+  private async dropUncommittedEvents(teamId: string, state: TeamState): Promise<void> {
+    let raw: string;
+    try {
+      raw = await readFile(join(this.teamDir(teamId), "events.jsonl"), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    const kept = this.committedEvents(teamId, raw, state);
+    if (kept.length === raw.split("\n").filter(Boolean).length) return;
     await writeFile(
       join(this.teamDir(teamId), "events.jsonl"),
       kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length ? "\n" : ""),
     );
+  }
+  private committedEvents(teamId: string, raw: string, state: TeamState): TeamEvent[] {
+    const lines = raw.split("\n").filter(Boolean);
+    if (state.eventCount !== undefined && lines.length < state.eventCount)
+      throw new Error("Kitchen committed event journal is truncated");
+    const committed = state.eventCount === undefined ? lines : lines.slice(0, state.eventCount);
+    return committed
+      .map((line, position) =>
+        TeamEventSchema.parse({ ...JSON.parse(line), id: `${teamId}:${position}` }),
+      )
+      .filter((event) => {
+        if (state.eventCount !== undefined && event.commit > state.commit)
+          throw new Error("Kitchen event journal contradicts its committed state");
+        return event.commit <= state.commit;
+      });
   }
 }

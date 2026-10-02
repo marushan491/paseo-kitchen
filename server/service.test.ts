@@ -1,3 +1,5 @@
+import { publishCandidate } from "./publication.js";
+import { captureTrackedFiles } from "./evidence.js";
 import { KitchenSchedules, computeNextRunAt } from "./schedules.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -20,6 +22,7 @@ interface FakeRecord {
   runtimeInfo?: { model: string };
   currentModeId?: string;
   thinkingOptionId?: string;
+  routingNotice?: { status: "waiting"; reason: string; resetsAt: string };
 }
 
 function fakeHost() {
@@ -45,6 +48,7 @@ function fakeHost() {
       list: async () => [...records.values()],
       isRunning: async () => false,
       create: async (input: {
+        provider?: string;
         labels?: Record<string, string>;
         cwd?: string;
         mode?: string;
@@ -54,7 +58,7 @@ function fakeHost() {
         n += 1;
         const record: FakeRecord = {
           id: `agent-${n}`,
-          provider: "codex",
+          provider: input.provider ?? "codex",
           cwd: input.worktree
             ? `/repo/.worktrees/${input.worktree.worktreeName}`
             : (input.cwd ?? "/repo"),
@@ -96,6 +100,169 @@ describe("TeamService", () => {
   });
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("persists named workflows, executes ordered steps with the selected harness, and snapshots running agents", async () => {
+    const host = fakeHost();
+    const validate = async (input: { provider: string; model?: string }) => {
+      if (
+        input.provider !== "codex" ||
+        (input.model && !["gpt-6.1-sol", "host-model"].includes(input.model))
+      )
+        throw new Error("Unadvertised model");
+    };
+    const svc = new TeamService({
+      ...(host.options as unknown as TeamServiceOptions),
+      storageRoot: root,
+      controller: {
+        ...host.options.controller,
+        validateProvider: validate,
+      } as unknown as TeamServiceOptions["controller"],
+    });
+    await svc.start();
+    await svc.saveProfile(
+      {
+        id: "careful",
+        name: "Careful planning",
+        profile: {
+          model: "host-model",
+          provider: "codex",
+          thinking: "high",
+          mode: "read-only",
+          instructions: "Keep tasks bounded",
+          steps: [
+            { id: "inspect", title: "Inspect", instructions: "Inspect the public contract" },
+            { id: "plan", title: "Plan", instructions: "Write a dependency plan" },
+          ],
+        },
+      },
+      root,
+    );
+    const started = await svc.startTeam({
+      bossAgentId: "boss",
+      title: "Configured",
+      objective: "Plan",
+      roleProfiles: { po: { workflowProfileId: "careful" } },
+    });
+    await svc.dispatchAll();
+    const po = host.agentFor("po");
+    expect(po).toMatchObject({
+      provider: "codex/host-model",
+      currentModeId: "read-only",
+      thinkingOptionId: "high",
+    });
+    const prompt = host.prompts.find((entry) => entry.agentId === po.id)!.prompt;
+    expect(prompt).toContain("Keep tasks bounded");
+    expect(prompt.indexOf("1. Inspect [inspect]")).toBeLessThan(prompt.indexOf("2. Plan [plan]"));
+    const configured = await svc.configureWork(
+      started.team.id,
+      started.team.rootItemId,
+      "po",
+      { instructions: "Next binding only", thinking: "low" },
+      "human",
+    );
+    const binding = Object.values(configured.bindings).find((entry) => entry.agentId === po.id)!;
+    expect(binding.executedProfile).toMatchObject({
+      instructions: "Keep tasks bounded",
+      thinking: "high",
+    });
+    expect(configured.items[started.team.rootItemId]!.roleProfiles!.po).toMatchObject({
+      instructions: "Next binding only",
+      thinking: "low",
+    });
+    expect(po.thinkingOptionId).toBe("high");
+    await svc.onTurnEnded(started.team.id, po.id, false);
+    await svc.dispatchAll();
+    expect(host.prompts.at(-1)!.prompt).toContain("Keep tasks bounded");
+    expect(host.prompts.at(-1)!.prompt).not.toContain("Next binding only");
+    await svc.plan(po.id, [
+      { key: "A", title: "A", objective: "Implement", acceptanceCriteria: ["works"] },
+    ]);
+    const planned = (await svc.status(started.team.id)).state;
+    const work = itemByKey(planned, "A");
+    await svc.configureWork(
+      started.team.id,
+      work.id,
+      "developer",
+      { workflowProfileId: "careful", instructions: "Only this item developer" },
+      "human",
+    );
+    await svc.report(po.id, { outcome: "planned", summary: "One bounded item" });
+    await svc.dispatchAll();
+    const developer = host.agentFor("developer");
+    expect(developer).toMatchObject({
+      provider: "codex/host-model",
+      thinkingOptionId: "high",
+      currentModeId: "read-only",
+    });
+    expect(host.prompts.find((entry) => entry.agentId === developer.id)!.prompt).toContain(
+      "Only this item developer",
+    );
+    await svc.shutdown();
+    const reloaded = makeService(root, host);
+    expect((await reloaded.profiles.list())[0]!.name).toBe("Careful planning");
+    await reloaded.profiles.remove("careful");
+    expect(await reloaded.profiles.list()).toEqual([]);
+    expect((await reloaded.store.get(started.team.id))!.team.roleProfiles.po!.instructions).toBe(
+      "Keep tasks bounded",
+    );
+    await expect(
+      svc.saveProfile(
+        { id: "bad", name: "Bad", profile: { provider: "codex", model: "invented" } },
+        root,
+      ),
+    ).rejects.toThrow("Unadvertised model");
+    expect(await reloaded.profiles.list()).toEqual([]);
+  });
+
+  it("inherits workflow-only project profiles and rejects unresolved references and unknown roles before creating workers", async () => {
+    const host = fakeHost();
+    const svc = makeService(root, host);
+    await mkdir(join(root, ".agent-factory"));
+    await writeFile(
+      join(root, ".agent-factory", "project.json"),
+      JSON.stringify({
+        roles: {
+          po: {
+            instructions: "Project planning rule",
+            steps: [{ id: "first", title: "First", instructions: "Study objective" }],
+          },
+        },
+      }),
+    );
+    await svc.start();
+    await expect(
+      svc.startTeam({
+        bossAgentId: "boss",
+        title: "Missing",
+        objective: "Plan",
+        cwd: root,
+        roleProfiles: { po: { workflowProfileId: "missing" } },
+      }),
+    ).rejects.toThrow("not found");
+    await expect(
+      svc.startTeam({
+        bossAgentId: "boss",
+        title: "Unknown",
+        objective: "Plan",
+        roleProfiles: { invented: {} },
+      }),
+    ).rejects.toThrow("Unknown workflow role");
+    expect(host.created).toHaveLength(0);
+    const state = await svc.startTeam({
+      bossAgentId: "boss",
+      title: "Project",
+      objective: "Plan",
+      cwd: root,
+    });
+    await svc.dispatchAll();
+    expect(state.team.roleProfiles.po).toMatchObject({
+      provider: "codex",
+      model: "gpt-6.1-sol",
+      instructions: "Project planning rule",
+    });
+    expect(host.prompts[0]!.prompt).toContain("Study objective");
+    await svc.shutdown();
   });
 
   it("runs plan → implement → test → review → done and survives a daemon restart mid-work", async () => {
@@ -326,6 +493,82 @@ describe("Plugin recovery and controls", () => {
   });
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("does not revive or inspect closed jobs during recovery, even with unavailable host metadata", async () => {
+    const host = fakeHost();
+    const svc = makeService(root, host);
+    const started = await svc.startTeam({
+      bossAgentId: "boss",
+      title: "Closed",
+      objective: "Keep closed",
+    });
+    await svc.shutdown();
+    for (const status of ["done", "canceled"] as const) {
+      await svc.store.commit(started.team.id, (draft) => {
+        draft.team.status = status;
+        return { events: [], result: null };
+      });
+      const before = (await svc.store.get(started.team.id))!;
+      const loaded = new TeamService({
+        ...(host.options as unknown as TeamServiceOptions),
+        storageRoot: root,
+        controller: {
+          ...host.options.controller,
+          get: async () => {
+            throw new Error("Host unavailable");
+          },
+        } as unknown as TeamServiceOptions["controller"],
+      });
+      await loaded.start();
+      expect((await loaded.store.get(started.team.id))!.team.status).toBe(status);
+      expect((await loaded.store.get(started.team.id))!.commit).toBe(before.commit);
+      await loaded.shutdown();
+    }
+  });
+
+  it("waits for an actual host routing reset and retains that retry across reload", async () => {
+    const host = fakeHost();
+    let now = new Date(Date.now() + 1_000);
+    const options = {
+      ...(host.options as unknown as TeamServiceOptions),
+      storageRoot: root,
+      now: () => now,
+    };
+    let svc = new TeamService(options);
+    await svc.start();
+    const started = await svc.startTeam({ bossAgentId: "boss", title: "Reset", objective: "Wait" });
+    await svc.dispatchAll();
+    const po = host.agentFor("po");
+    const resetsAt = new Date(now.getTime() + 60 * 60_000).toISOString();
+    po.routingNotice = {
+      status: "waiting",
+      reason: "Provider limit reached",
+      resetsAt,
+    };
+    await svc.onTurnEnded(started.team.id, po.id, true);
+    const retry = Object.values((await svc.store.get(started.team.id))!.decisions).find(
+      (decision) => decision.payload.routingResetAt,
+    )!;
+    expect(retry.availableAt).toBe(new Date(Date.parse(resetsAt) + 1_000).toISOString());
+    await expect(svc.retryDecision(started.team.id, retry.id, "human")).rejects.toThrow(
+      "reported reset",
+    );
+    await svc.dispatchAll();
+    expect(host.prompts.filter((entry) => entry.agentId === po.id)).toHaveLength(1);
+    await svc.shutdown();
+    svc = new TeamService(options);
+    await svc.start();
+    await svc.dispatchAll();
+    expect(host.prompts.filter((entry) => entry.agentId === po.id)).toHaveLength(1);
+    const productiveBefore = (await svc.store.get(started.team.id))!.team.runtime!.usage.activeMs;
+    now = new Date(Date.parse(resetsAt) + 2_000);
+    await svc.dispatchAll();
+    expect(host.prompts.filter((entry) => entry.agentId === po.id)).toHaveLength(2);
+    expect((await svc.store.get(started.team.id))!.team.runtime!.usage.activeMs).toBe(
+      productiveBefore,
+    );
+    await svc.shutdown();
   });
 
   it("respects the configured concurrency slot", async () => {
@@ -730,6 +973,8 @@ function kitchenFakeHost() {
 }
 
 type KitchenTestOptions = ReturnType<typeof kitchenFakeHost>["options"] & {
+  controllerOverrides?: Partial<TeamServiceOptions["controller"]>;
+  policyUsage?: TeamServiceOptions["policyUsage"];
   storageRoot: string;
   now?: () => Date;
   resolveWorkspace?: (
@@ -745,7 +990,13 @@ class KitchenTestService extends TeamService {
       logger: options.logger,
       packs: options.packs,
       timers: options.timers,
+      operatorCredential: () => "synthetic-test-operator-capability-32-chars",
+      verificationSnapshot: async (cwd: string) =>
+        cwd.startsWith("/repo")
+          ? { head: "synthetic", status: "", files: {} }
+          : captureTrackedFiles(cwd),
       now: options.now,
+      policyUsage: options.policyUsage,
       controller: {
         get: async (id) => {
           const record = await options.agentStorage.get(id);
@@ -774,6 +1025,7 @@ class KitchenTestService extends TeamService {
         resolveWorkspace: options.resolveWorkspace ?? (async () => null),
         findWorkspaceForCwd: options.findWorkspaceForCwd ?? (async () => null),
         validateProvider: options.validateProvider,
+        ...options.controllerOverrides,
       },
     } as TeamServiceOptions);
     kitchenServices.add(this);
@@ -795,6 +1047,227 @@ describe("Kitchen runtime", () => {
   afterEach(async () => {
     await stopKitchenServices();
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("routes automatic Lead decisions into a real single pack and preserves the spec and classification across retries", async () => {
+    const host = kitchenFakeHost();
+    let classified = 0;
+    const decisionSource = {
+      classify: async () => {
+        classified += 1;
+        return {
+          source: "jev" as const,
+          model: "controlled-fixture",
+          executionMode: "single" as const,
+          confidence: 1,
+          latencyMs: 1,
+          reason: "Bounded change",
+        };
+      },
+      judge: async () => ({
+        source: "jev" as const,
+        model: "controlled-fixture",
+        verdict: "pass" as const,
+        confidence: 1,
+        latencyMs: 1,
+        reason: "Fixture only",
+      }),
+    };
+    const svc = new TeamService({
+      storageRoot: root,
+      packs: new PackRegistry(),
+      logger: host.options.logger,
+      timers: false,
+      decisionSource,
+      controller: {
+        get: async (id) => host.records.get(id) ?? null,
+        list: async () => [...host.records.values()],
+        isRunning: async () => false,
+        create: async (input) => ({ id: (await host.options.createAgent(input)).snapshot.id }),
+        send: async (id, prompt) => {
+          host.prompts.push({ agentId: id, prompt });
+        },
+        validateProvider: async () => {},
+        update: async () => {},
+        findWorkspaceForCwd: async () => null,
+      } as unknown as TeamServiceOptions["controller"],
+    });
+    await mkdir(join(root, ".agent-factory"), { recursive: true });
+    await writeFile(
+      join(root, ".agent-factory", "project.json"),
+      JSON.stringify({
+        roles: {
+          po: { instructions: "Planning only" },
+          developer: { instructions: "Project implementation default" },
+        },
+      }),
+    );
+    await svc.saveProfile(
+      {
+        id: "single-developer",
+        name: "Developer workflow",
+        profile: {
+          instructions: "Chosen Developer instructions",
+          steps: [
+            { id: "check", title: "Check", instructions: "Perform the chosen Developer check" },
+          ],
+        },
+      },
+      root,
+    );
+    const input = {
+      title: "Single",
+      objective: "One change",
+      spec: "Do not change the API signature",
+      cwd: root,
+      provider: "codex",
+      executionMode: "auto" as const,
+      idempotencyKey: "auto-single",
+      roleProfiles: { developer: { workflowProfileId: "single-developer" } },
+      acceptanceCriteria: [{ id: "works", text: "Works" }],
+    };
+    const team = await svc.startKitchen(input);
+    await svc.dispatchAll();
+    expect(team.team.packId).toBe("kitchen-single");
+    expect(team.team.kitchen?.classification?.model).toBe("controlled-fixture");
+    expect(team.team.kitchen?.executionMode).toBe("single");
+    expect(host.created.some((agent) => agent.labels[TEAM_ROLE_LABEL] === "po")).toBe(false);
+    const worker = host.agentFor("integrator");
+    expect(host.prompts.find((entry) => entry.agentId === worker.id)!.prompt).toContain(
+      "Do not change the API signature",
+    );
+    const actual = (await svc.status(team.team.id)).state;
+    const binding = Object.values(actual.bindings).find((seat) => seat.agentId === worker.id)!;
+    expect(binding.executedProfile?.workflowProfileId).toBe("single-developer");
+    expect(host.prompts.find((entry) => entry.agentId === worker.id)!.prompt).toContain(
+      "Perform the chosen Developer check",
+    );
+    expect(actual.team.roleProfiles.po).toBeUndefined();
+    expect((await svc.startKitchen(input)).team.id).toBe(team.team.id);
+    expect(classified).toBe(1);
+    await expect(
+      svc.startKitchen({
+        ...input,
+        idempotencyKey: "typo-role",
+        roleProfiles: { developre: { instructions: "Typo" } },
+      }),
+    ).rejects.toThrow("Unknown workflow role developre");
+    await expect(
+      svc.report(worker.id, { outcome: "done", summary: "Missing evidence" }),
+    ).rejects.toThrow(/commit/);
+    await svc.shutdown();
+  });
+
+  it("blocks unobservable token/cost policies before creating agents and bounds actual new worker starts", async () => {
+    const host = kitchenFakeHost();
+    const service = makeKitchenService(root, host);
+    const input = {
+      title: "Budget",
+      objective: "Bound work",
+      cwd: root,
+      provider: "codex",
+      idempotencyKey: "budget",
+      acceptanceCriteria: [{ id: "works", text: "Works" }],
+    };
+    await expect(service.startKitchen({ ...input, policy: { maxTokens: 1000 } })).rejects.toThrow(
+      "unavailable",
+    );
+    await expect(service.startKitchen({ ...input, policy: { maxCostUsd: 1 } })).rejects.toThrow(
+      "unavailable",
+    );
+    expect(host.created).toHaveLength(0);
+    const team = await service.startKitchen({ ...input, policy: { maxAgentStarts: 1 } });
+    await service.dispatchAll();
+    const po = host.agentFor("po");
+    await service.report(po.id, { outcome: "planned", summary: "One item" }, [
+      { key: "A", title: "A", objective: "A", acceptanceCriteria: ["Works"] },
+    ]);
+    await service.dispatchAll();
+    expect(host.created.filter((agent) => agent.labels[TEAM_ROLE_LABEL])).toHaveLength(1);
+    const pending = Object.values((await service.store.get(team.team.id))!.decisions).find(
+      (decision) => decision.lastError?.includes("maxAgentStarts"),
+    );
+    expect(pending?.status).toBe("retry");
+    const trustedHost = kitchenFakeHost();
+    const trusted = new KitchenTestService({
+      ...trustedHost.options,
+      storageRoot: join(root, "trusted-budget"),
+      policyUsage: async () => ({
+        scope: "team",
+        cumulative: true,
+        complete: true,
+        tokens: 0,
+        costUsd: 0,
+      }),
+    });
+    const observed = await trusted.startKitchen({
+      ...input,
+      idempotencyKey: "observed-budget",
+      policy: { maxTokens: 1000, maxCostUsd: 1 },
+    });
+    await trusted.dispatchAll();
+    expect(trustedHost.created.filter((agent) => agent.labels[TEAM_ROLE_LABEL])).toHaveLength(1);
+    expect(
+      (
+        await trusted.startKitchen({
+          ...input,
+          idempotencyKey: "observed-budget",
+          policy: { maxTokens: 1000, maxCostUsd: 1 },
+        })
+      ).team.id,
+    ).toBe(observed.team.id);
+  });
+
+  it("publishes only the explicit candidate and reuses a matching PR after a lost response", async () => {
+    const calls: Array<{ executable: string; args: string[] }> = [];
+    const commit = "a".repeat(40);
+    let rows = "[]";
+    const runner = async (executable: string, args: string[]) => {
+      calls.push({ executable, args });
+      if (args.includes("get-url")) return "git@github.com:example/fixture.git";
+      if (args.includes("list")) return rows;
+      if (args.includes("create")) {
+        rows = JSON.stringify([
+          { url: "https://github.com/example/fixture/pull/1", headRefOid: commit },
+        ]);
+        return "https://github.com/example/fixture/pull/1";
+      }
+      return "";
+    };
+    const params = {
+      enabled: true,
+      remote: "origin",
+      branch: "kitchen/fixture",
+      baseBranch: "main",
+    };
+    await expect(
+      publishCandidate(
+        root,
+        commit,
+        { ...params, enabled: false },
+        { executable: "fixture-gh" },
+        runner,
+      ),
+    ).rejects.toThrow("explicitly enabled");
+    expect(calls).toHaveLength(0);
+    expect(await publishCandidate(root, commit, params, { executable: "fixture-gh" }, runner)).toBe(
+      "https://github.com/example/fixture/pull/1",
+    );
+    expect(await publishCandidate(root, commit, params, { executable: "fixture-gh" }, runner)).toBe(
+      "https://github.com/example/fixture/pull/1",
+    );
+    expect(calls.filter((call) => call.args.includes("push"))).toHaveLength(1);
+    expect(calls.find((call) => call.args.includes("push"))!.args).toEqual([
+      "push",
+      "origin",
+      `${commit}:refs/heads/kitchen/fixture`,
+    ]);
+    expect(calls.filter((call) => call.args.includes("create"))).toHaveLength(1);
+    expect(
+      calls
+        .filter((call) => call.executable === "fixture-gh")
+        .every((call) => call.args.includes("github.com/example/fixture")),
+    ).toBe(true);
   });
 
   it("creates one Boss and team for concurrent retries and survives a service reload", async () => {
@@ -823,6 +1296,12 @@ describe("Kitchen runtime", () => {
     await expect(reloaded.startKitchen({ ...input, objective: "Another request" })).rejects.toThrow(
       /Idempotency key/,
     );
+    await expect(
+      reloaded.startKitchen({
+        ...input,
+        roleProfiles: { developer: { instructions: "Different worker policy" } },
+      }),
+    ).rejects.toThrow(/Idempotency key/);
     expect(host.created.filter((agent) => !agent.labels[TEAM_ROLE_LABEL])).toHaveLength(1);
   });
 
@@ -1165,9 +1644,12 @@ describe("Kitchen runtime", () => {
       idempotencyKey: "verify",
     });
     await service.dispatchAll();
-    await expect(service.controlKitchen(team.team.id, "accept", "operator")).rejects.toThrow(
-      /final verified candidate/,
-    );
+    await expect(
+      service.controlKitchen(team.team.id, "accept", "operator", {
+        credential: "synthetic-test-operator-capability-32-chars",
+        candidateCommit: "0".repeat(40),
+      }),
+    ).rejects.toThrow(/final verified candidate/);
     const planner = host.agentFor("po");
     await service.plan(planner.id, [
       {
@@ -1210,6 +1692,71 @@ describe("Kitchen runtime", () => {
     await service.dispatchAll();
     state = (await service.status(team.team.id)).state;
     const verifier = host.agentFor("verifier", "A", state);
+    await git("git", [
+      "-C",
+      verifier.cwd,
+      "commit",
+      "--allow-empty",
+      "-m",
+      "Unauthorized verifier mutation",
+    ]);
+    const tamperedHead = (
+      await git("git", ["-C", verifier.cwd, "rev-parse", "HEAD"])
+    ).stdout.trim();
+    await expect(
+      service.report(verifier.id, {
+        outcome: "pass",
+        summary: "Mutated verifier",
+        artifacts: [{ kind: "commit", ref: tamperedHead }],
+        criteria: itemByKey(state, "A").acceptanceCriteria.map((criterion) => ({
+          id: criterion.id,
+          met: true,
+          evidence: "Untrusted claimed result",
+        })),
+      }),
+    ).rejects.toThrow("protected-file");
+    expect(
+      (await service.store.get(team.team.id))!.items[itemByKey(state, "A").id]!.checks!.some(
+        (check) => !check.passed,
+      ),
+    ).toBe(true);
+    await service.shutdown();
+    const replay = new KitchenTestService({
+      ...host.options,
+      storageRoot: root,
+      controllerOverrides: {
+        get: async (id) => {
+          const record = host.records.get(id);
+          return record ? { ...record, running: false } : null;
+        },
+        completion: async (id) =>
+          id === verifier.id
+            ? {
+                report: {
+                  outcome: "pass",
+                  summary: "Recovered tampered verifier",
+                  artifacts: [{ kind: "commit", ref: tamperedHead }],
+                  criteria: itemByKey(state, "A").acceptanceCriteria.map((criterion) => ({
+                    id: criterion.id,
+                    met: true,
+                    evidence: "Untrusted recovery claim",
+                  })),
+                },
+              }
+            : null,
+      },
+    });
+    await replay.start();
+    const recovered = (await replay.status(team.team.id)).state;
+    expect(recovered.team.status).toBe("paused");
+    expect(itemByKey(recovered, "A").phase).toBe("verify");
+    expect(itemByKey(recovered, "A").checks!.some((check) => !check.passed)).toBe(true);
+    expect(itemByKey(recovered, "A").pack.verifiedCommit).toBeUndefined();
+    await replay.shutdown();
+    await git("git", ["-C", verifier.cwd, "reset", "--hard", head]);
+    await service.start();
+    await service.controlKitchen(team.team.id, "resume", "operator");
+    await service.dispatchAll();
     const payload = {
       outcome: "pass",
       summary: "Verified",
@@ -1278,16 +1825,32 @@ describe("Kitchen runtime", () => {
       "ready-for-human",
     );
     await writeFile(join(integrator.cwd, "result.txt"), "Changed after verification");
-    await expect(service.controlKitchen(team.team.id, "accept", "operator")).rejects.toThrow(
-      /clean worktree/,
-    );
+    await expect(
+      service.controlKitchen(team.team.id, "accept", "operator", {
+        credential: "synthetic-test-operator-capability-32-chars",
+        candidateCommit: combinedHead,
+      }),
+    ).rejects.toThrow(/clean worktree/);
     await git("git", ["-C", integrator.cwd, "add", "result.txt"]);
     await git("git", ["-C", integrator.cwd, "commit", "-m", "Changed candidate"]);
-    await expect(service.controlKitchen(team.team.id, "accept", "operator")).rejects.toThrow(
-      /current git HEAD/,
-    );
+    await expect(
+      service.controlKitchen(team.team.id, "accept", "operator", {
+        credential: "synthetic-test-operator-capability-32-chars",
+        candidateCommit: combinedHead,
+      }),
+    ).rejects.toThrow(/current git HEAD/);
     await git("git", ["-C", integrator.cwd, "checkout", combinedHead]);
-    const accepted = await service.controlKitchen(team.team.id, "accept", "operator");
+    await expect(
+      service.controlKitchen(team.team.id, "accept", "claimed-human", {
+        credential: "wrong",
+        candidateCommit: combinedHead,
+      }),
+    ).rejects.toThrow("credential rejected");
+    expect((await service.store.get(team.team.id))!.team.kitchen?.acceptedCommit).toBeUndefined();
+    const accepted = await service.controlKitchen(team.team.id, "accept", "operator", {
+      credential: "synthetic-test-operator-capability-32-chars",
+      candidateCommit: combinedHead,
+    });
     expect(accepted.team.status).toBe("done");
     expect(accepted.items[accepted.team.rootItemId]!.phase).toBe("done");
     expect(accepted.team.kitchen?.acceptedCommit).toBe(combinedHead);
@@ -1297,7 +1860,10 @@ describe("Kitchen runtime", () => {
     );
     expect(acceptance).toHaveLength(1);
     expect(acceptance[0]!.actor).toEqual({ type: "human", id: "operator" });
-    await service.controlKitchen(team.team.id, "accept", "operator");
+    await service.controlKitchen(team.team.id, "accept", "operator", {
+      credential: "synthetic-test-operator-capability-32-chars",
+      candidateCommit: combinedHead,
+    });
     expect(
       (await service.status(team.team.id)).events.filter((event) => event.type === "team.accepted"),
     ).toHaveLength(1);

@@ -1,6 +1,12 @@
+import { kitchenCompletionByWorkspace } from "../shared/dashboard/completion-model.js";
 import { describe, expect, it } from "vitest";
 import type { TeamState, TeamEvent } from "../shared/factory-contracts.js";
-import { acceptanceProblem, kitchenInsights, parseCriteria } from "./kitchen-model.js";
+import {
+  acceptanceProblem,
+  kitchenInsights,
+  parseCriteria,
+  parsePolicyDraft,
+} from "./kitchen-model.js";
 
 function ready(): TeamState {
   return {
@@ -103,4 +109,49 @@ describe("Kitchen acceptance", () => {
     expect(kitchenInsights(state, events).completed).toHaveLength(1);
     expect(kitchenInsights(state, events)).toMatchObject({ reports: 1, rejected: 1, messages: 1 });
   });
+});
+
+describe("Kitchen workspace completion", () => {
+  it("uses public agent workspace identity and preserves active work instead of closing it", () => {
+    const accepted = ready();
+    accepted.team.status = "done";
+    accepted.team.kitchen = {
+      idempotencyKey: "key",
+      requestFingerprint: "fingerprint",
+      mode: "accompanied",
+      acceptedAt: "2026-10-02T12:00:00Z",
+      acceptedCommit: "a".repeat(40),
+    };
+    const agents = [{ id: "boss", workspaceId: "ws", status: "idle" }];
+    expect(kitchenCompletionByWorkspace([accepted], agents, "host")).toEqual({
+      "host:ws": "2026-10-02T12:00:00Z",
+    });
+    expect(
+      kitchenCompletionByWorkspace(
+        [accepted],
+        [...agents, { id: "other", workspaceId: "ws", status: "running" }],
+        "host",
+      ),
+    ).toEqual({});
+    const active = ready();
+    expect(kitchenCompletionByWorkspace([accepted, active], agents, "host")).toEqual({});
+    expect(kitchenCompletionByWorkspace([accepted], [], "host")).toEqual({});
+  });
+});
+
+it("validates explicit policy drafts without silently dropping chosen gates", () => {
+  expect(
+    parsePolicyDraft({
+      maxTokens: "2000",
+      maxChainSteps: "8",
+      maxDelegationDepth: "0",
+      requireOutcomeJudge: "required",
+    }),
+  ).toMatchObject({
+    success: true,
+    data: { maxTokens: 2000, maxChainSteps: 8, maxDelegationDepth: 0, requireOutcomeJudge: true },
+  });
+  expect(parsePolicyDraft({ maxCostUsd: "unmeasurable" }).success).toBe(false);
+  expect(parsePolicyDraft({ maxAgentStarts: "0" }).success).toBe(false);
+  expect(parsePolicyDraft({ maxTokens: " " })).toMatchObject({ success: true, data: {} });
 });

@@ -30,6 +30,62 @@ export const CriterionSchema = z.object({
   evidence: z.string().optional(),
 });
 
+export const WorkflowStepSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  instructions: z.string().min(1),
+});
+export const RoleProfileOverrideSchema = z.object({
+  provider: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  thinking: z.string().min(1).optional(),
+  mode: z.string().min(1).optional(),
+  workflowProfileId: z.string().min(1).optional(),
+  instructions: z.string().optional(),
+  steps: z.array(WorkflowStepSchema).optional(),
+});
+export const RoleProfileSchema = RoleProfileOverrideSchema.extend({ provider: z.string().min(1) });
+export type RoleProfile = z.infer<typeof RoleProfileSchema>;
+export type RoleProfileOverride = z.infer<typeof RoleProfileOverrideSchema>;
+export const FactoryPolicySchema = z.object({
+  maxTokens: z.number().int().positive().optional(),
+  maxCostUsd: z.number().finite().positive().optional(),
+  maxAgentStarts: z.number().int().positive().optional(),
+  maxChainSteps: z.number().int().positive().optional(),
+  requireOutcomeJudge: z.boolean().optional(),
+  maxDelegationDepth: z.number().int().nonnegative().optional(),
+  roleActiveMs: z.number().int().positive().optional(),
+  totalActiveMs: z.number().int().positive().optional(),
+});
+export type FactoryPolicy = z.infer<typeof FactoryPolicySchema>;
+export const PublicationSchema = z.object({
+  enabled: z.boolean(),
+  remote: z.string().min(1),
+  branch: z.string().min(1),
+  baseBranch: z.string().min(1),
+  title: z.string().min(1).optional(),
+});
+export const EvidenceResultSchema = z.object({
+  id: z.string().min(1),
+  criterionId: z.string().min(1).optional(),
+  kind: z.enum(["command", "browser-artifact", "protected-files", "judge"]),
+  passed: z.boolean(),
+  summary: z.string(),
+  checkedAt: z.string(),
+  candidateCommit: z.string().optional(),
+  artifactSha256: z.string().optional(),
+  exitCode: z.number().int().nullable().optional(),
+  stdout: z.string().optional(),
+  stderr: z.string().optional(),
+});
+export type EvidenceResult = z.infer<typeof EvidenceResultSchema>;
+export const WorkflowProfileSchema = z.object({
+  id: z.string().regex(/^[A-Za-z0-9_-]+$/),
+  name: z.string().min(1),
+  profile: RoleProfileOverrideSchema.omit({ workflowProfileId: true }),
+});
+export type WorkflowProfile = z.infer<typeof WorkflowProfileSchema>;
+
 export const WorkItemSchema = z.object({
   id: z.string(),
   teamId: z.string(),
@@ -59,6 +115,8 @@ export const WorkItemSchema = z.object({
   ),
   returns: z.number().int(),
   bindings: z.record(z.string(), z.string()),
+  roleProfiles: z.record(z.string(), RoleProfileSchema).optional(),
+  checks: z.array(EvidenceResultSchema).optional(),
   pack: z.record(z.string(), z.unknown()),
 });
 export type WorkItem = z.infer<typeof WorkItemSchema>;
@@ -72,6 +130,7 @@ export const BindingSchema = z.object({
   decisionId: z.string(),
   agentId: z.string(),
   profile: z.string(),
+  executedProfile: RoleProfileSchema.optional(),
   status: z.enum(["active", "revoked"]),
   turn: z.enum(["starting", "running", "idle", "reported"]),
   nudges: z.number().int(),
@@ -136,15 +195,11 @@ export const TeamSchema = z.object({
   rootItemId: z.string(),
   status: z.enum(["active", "paused", "done", "canceled"]),
   pausedReason: z.string().optional(),
-  roleProfiles: z.record(
-    z.string(),
-    z.object({
-      provider: z.string(),
-      model: z.string().optional(),
-      thinking: z.string().optional(),
-      mode: z.string().optional(),
-    }),
-  ),
+  roleProfiles: z.record(z.string(), RoleProfileSchema),
+  policy: FactoryPolicySchema.optional(),
+  importedFrom: z
+    .object({ source: z.string(), importedAt: z.string(), readOnly: z.boolean() })
+    .optional(),
   runtime: TeamRuntimeSchema.optional(),
   kitchen: z
     .object({
@@ -152,6 +207,34 @@ export const TeamSchema = z.object({
       requestFingerprint: z.string(),
       mode: z.literal("accompanied"),
       workflowMode: z.enum(["fixed", "self-organizing"]).optional(),
+      executionMode: z.enum(["single", "team"]).optional(),
+      classification: z
+        .object({
+          source: z.literal("jev"),
+          model: z.string().min(1),
+          executionMode: z.enum(["single", "team", "human"]),
+          confidence: z.number().min(0).max(1),
+          latencyMs: z.number().nonnegative(),
+          reason: z.string(),
+          usage: z
+            .object({
+              inputTokens: z.number().int().nonnegative(),
+              outputTokens: z.number().int().nonnegative(),
+            })
+            .optional(),
+        })
+        .optional(),
+      spec: z.string().optional(),
+      publication: PublicationSchema.optional(),
+      published: z.object({ commit: z.string(), url: z.string(), at: z.string() }).optional(),
+      approval: z
+        .object({
+          method: z.literal("plugin-credential"),
+          credentialId: z.string(),
+          candidateCommit: z.string(),
+          at: z.string(),
+        })
+        .optional(),
       stopped: z.boolean().optional(),
       scheduleId: z.string().optional(),
       kind: z.enum(["feature", "bug", "maintenance"]).optional(),
@@ -167,6 +250,7 @@ export const TeamSchema = z.object({
 export type Team = z.infer<typeof TeamSchema>;
 
 export const TeamStateSchema = z.object({
+  eventCount: z.number().int().nonnegative().optional(),
   commit: z.number().int(),
   team: TeamSchema,
   items: z.record(z.string(), WorkItemSchema),
@@ -256,6 +340,7 @@ export const factoryStart = defineRpc({
     cwd: z.string().min(1).optional(),
     packId: z.string().min(1).optional(),
     force: z.boolean().optional(),
+    roleProfiles: z.record(z.string(), RoleProfileOverrideSchema).optional(),
   }),
   output: TeamStateSchema,
 });
@@ -312,7 +397,12 @@ export const StartKitchenSchema = z.object({
   thinking: z.string().optional(),
   packId: z.string().optional(),
   idempotencyKey: z.string().min(1),
+  roleProfiles: z.record(z.string(), RoleProfileOverrideSchema).optional(),
   workflowMode: z.enum(["fixed", "self-organizing"]).optional(),
+  executionMode: z.enum(["auto", "single", "team"]).optional(),
+  spec: z.string().optional(),
+  publication: PublicationSchema.optional(),
+  policy: FactoryPolicySchema.optional(),
   scheduleId: z.string().optional(),
   kind: z.enum(["feature", "bug", "maintenance"]).optional(),
   sourceAgentId: z.string().optional(),
@@ -331,10 +421,25 @@ export const factoryKitchenControl = defineRpc({
     teamId: TeamIdSchema,
     action: z.enum(["pause", "resume", "stop", "cancel", "accept"]),
     actorId: z.string().min(1),
+    credential: z.string().min(1).max(4096).optional(),
+    candidateCommit: z
+      .string()
+      .regex(/^[a-f0-9]{40,64}$/)
+      .optional(),
+  }),
+  output: TeamStateSchema,
+});
+export const factoryPublish = defineRpc({
+  name: "factory.publish",
+  input: z.object({
+    teamId: TeamIdSchema,
+    credential: z.string().min(1).max(4096),
+    candidateCommit: z.string().regex(/^[a-f0-9]{40,64}$/),
   }),
   output: TeamStateSchema,
 });
 export const FactoryPackSchema = z.object({
+  roles: z.record(z.string(), z.object({ id: z.string(), title: z.string() })).optional(),
   id: z.string(),
   title: z.string(),
   version: z.number().int(),
@@ -416,4 +521,35 @@ export const factoryScheduleControl = defineRpc({
     actorId: z.string().min(1),
   }),
   output: KitchenScheduleSchema.nullable(),
+});
+
+export const factoryProfilesList = defineRpc({
+  name: "factory.profiles.list",
+  input: z.object({}),
+  output: z.object({ profiles: z.array(WorkflowProfileSchema) }),
+});
+export const factoryProfilesSave = defineRpc({
+  name: "factory.profiles.save",
+  input: z.object({
+    profile: WorkflowProfileSchema,
+    cwd: z.string().min(1),
+    actorId: z.string().min(1),
+  }),
+  output: WorkflowProfileSchema,
+});
+export const factoryProfilesRemove = defineRpc({
+  name: "factory.profiles.remove",
+  input: z.object({ id: WorkflowProfileSchema.shape.id, actorId: z.string().min(1) }),
+  output: z.object({}),
+});
+export const factoryWorkConfigure = defineRpc({
+  name: "factory.work.configure",
+  input: z.object({
+    teamId: TeamIdSchema,
+    workItemId: z.string().min(1),
+    role: z.string().min(1),
+    profile: RoleProfileOverrideSchema,
+    actorId: z.string().min(1),
+  }),
+  output: TeamStateSchema,
 });

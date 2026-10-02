@@ -1,6 +1,13 @@
+import { join } from "node:path";
+import { acquireRuntimeOwnership } from "./storage-lock.js";
+import type { KitchenRuntimeConfig } from "./runtime-config.js";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import {
+  factoryProfilesList,
+  factoryProfilesSave,
+  factoryProfilesRemove,
+  factoryWorkConfigure,
   factoryList,
   factoryStatus,
   factoryStart,
@@ -11,6 +18,7 @@ import {
   factoryPlan,
   factoryKitchenStart,
   factoryKitchenControl,
+  factoryPublish,
   factoryPacks,
   factoryRequestWork,
   factoryScheduleList,
@@ -33,6 +41,7 @@ export type FactoryOptions = Omit<
   enabled?: () => boolean;
   hostControl?: HostControlOptions | (() => Promise<HostControlOptions>);
   packDirectory?: () => Promise<string | undefined>;
+  runtimeConfig?: (storageRoot: string) => Promise<KitchenRuntimeConfig>;
 };
 
 export function registerFactory(server: PluginServerContext, options: FactoryOptions) {
@@ -40,6 +49,7 @@ export function registerFactory(server: PluginServerContext, options: FactoryOpt
   let schedules: KitchenSchedules | null = null;
   let starting: Promise<TeamService> | null = null;
   let disposed = false;
+  let releaseOwnership: (() => Promise<void>) | undefined;
   const ready = async (paseo: PaseoApi) => {
     if (disposed || options.enabled?.() === false) throw new Error("Factory plugin is disabled");
     if (starting) return starting;
@@ -49,47 +59,85 @@ export function registerFactory(server: PluginServerContext, options: FactoryOpt
         typeof options.storageRoot === "function"
           ? await options.storageRoot()
           : options.storageRoot;
-      const packs = options.packs ?? new PackRegistry();
-      const packDirectory = await options.packDirectory?.();
-      if (packDirectory) {
-        const result = await packs.loadFrom(packDirectory);
-        if (result.failed.length)
-          throw new Error(result.failed.map((value) => `${value.path}: ${value.error}`).join("; "));
-      }
-      const hostControl =
-        typeof options.hostControl === "function"
-          ? await options.hostControl()
-          : options.hostControl;
-      const next = new TeamService({
-        ...options,
-        storageRoot,
-        controller: sdkController(paseo, hostControl),
-        logger: options.logger ?? factoryLogger,
-        packs,
-      });
-      const nextSchedules = new KitchenSchedules({
-        storageRoot,
-        service: next,
-        now: options.now,
-        timers: options.timers,
-      });
+      const release = await acquireRuntimeOwnership(storageRoot);
       try {
-        await next.start();
-        await nextSchedules.start();
-        if (disposed) throw new Error("Factory stopped during startup");
+        const packs = options.packs ?? new PackRegistry();
+        const importedPacks = await packs.loadFrom(join(storageRoot, "imported-packs"));
+        if (importedPacks.failed.length)
+          throw new Error(
+            importedPacks.failed.map((entry) => `${entry.path}: ${entry.error}`).join("; "),
+          );
+        const packDirectory = await options.packDirectory?.();
+        if (packDirectory) {
+          const result = await packs.loadFrom(packDirectory);
+          if (result.failed.length)
+            throw new Error(
+              result.failed.map((value) => `${value.path}: ${value.error}`).join("; "),
+            );
+        }
+        const hostControl =
+          typeof options.hostControl === "function"
+            ? await options.hostControl()
+            : options.hostControl;
+        const runtimeConfig = await options.runtimeConfig?.(storageRoot);
+        const next = new TeamService({
+          ...options,
+          ...runtimeConfig,
+          storageRoot,
+          controller: sdkController(paseo, hostControl),
+          logger: options.logger ?? factoryLogger,
+          packs,
+        });
+        const nextSchedules = new KitchenSchedules({
+          storageRoot,
+          service: next,
+          now: options.now,
+          timers: options.timers,
+        });
+        try {
+          await next.start();
+          await nextSchedules.start();
+          if (disposed) throw new Error("Factory stopped during startup");
+        } catch (error) {
+          try {
+            await nextSchedules.stop();
+          } finally {
+            await next.shutdown();
+          }
+          throw error;
+        }
+        service = next;
+        schedules = nextSchedules;
+        releaseOwnership = release;
+        return next;
       } catch (error) {
-        await nextSchedules.stop();
-        await next.shutdown();
+        await release();
         throw error;
       }
-      service = next;
-      schedules = nextSchedules;
-      return next;
     })().finally(() => {
       starting = null;
     });
     return starting;
   };
+  server.handle(factoryProfilesList, async (_, { paseo }) => ({
+    profiles: await (await ready(paseo)).profiles.list(),
+  }));
+  server.handle(factoryProfilesSave, async (input, { paseo }) =>
+    (await ready(paseo)).saveProfile(input.profile, input.cwd),
+  );
+  server.handle(factoryProfilesRemove, async (input, { paseo }) => {
+    await (await ready(paseo)).profiles.remove(input.id);
+    return {};
+  });
+  server.handle(factoryWorkConfigure, async (input, { paseo }) =>
+    (await ready(paseo)).configureWork(
+      input.teamId,
+      input.workItemId,
+      input.role,
+      input.profile,
+      input.actorId,
+    ),
+  );
   server.handle(factoryList, async (input, { paseo }) => {
     const factory = await ready(paseo);
     const teams = [];
@@ -108,13 +156,22 @@ export function registerFactory(server: PluginServerContext, options: FactoryOpt
     (await ready(paseo)).startKitchen(input),
   );
   server.handle(factoryKitchenControl, async (input, { paseo }) =>
-    (await ready(paseo)).controlKitchen(input.teamId, input.action, input.actorId),
+    (await ready(paseo)).controlKitchen(input.teamId, input.action, input.actorId, {
+      credential: input.credential,
+      candidateCommit: input.candidateCommit,
+    }),
+  );
+  server.handle(factoryPublish, async (input, { paseo }) =>
+    (await ready(paseo)).publish(input.teamId, input.credential, input.candidateCommit),
   );
   server.handle(factoryRequestWork, async (input, { paseo }) => ({
     message: await (await ready(paseo)).requestWork(input.agentId, input.request),
   }));
   server.handle(factoryPacks, async (_, { paseo }) => ({
     packs: (await ready(paseo)).listPacks().map((pack) => ({
+      roles: Object.fromEntries(
+        Object.values(pack.roles).map((role) => [role.id, { id: role.id, title: role.title }]),
+      ),
       id: pack.id,
       title: pack.title,
       version: pack.version,
@@ -203,8 +260,16 @@ export function registerFactory(server: PluginServerContext, options: FactoryOpt
       disposed = true;
       remove();
       await starting?.catch(() => undefined);
-      await schedules?.stop();
-      await service?.shutdown();
+      try {
+        await schedules?.stop();
+      } finally {
+        try {
+          await service?.shutdown();
+        } finally {
+          await releaseOwnership?.();
+          releaseOwnership = undefined;
+        }
+      }
     },
   };
 }

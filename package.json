@@ -1,6 +1,6 @@
 {
   "name": "paseo-agent-factory",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "license": "Apache-2.0",
   "files": [
@@ -22,15 +22,21 @@
     "test": "vitest run --bail=1",
     "lint": "oxlint .",
     "format": "oxfmt .",
-    "format:check": "oxfmt --check ."
+    "format:check": "oxfmt --check .",
+    "format:files": "oxfmt"
+  },
+  "dependencies": {
+    "@getpaseo/client": "0.11.0-beta.3",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "three": "0.186.1"
   },
   "devDependencies": {
-    "@getpaseo/client": "0.11.0-beta.3",
     "@getpaseo/plugin": "0.11.0-beta.3",
     "@getpaseo/protocol": "0.11.0-beta.3",
     "@tanstack/react-query": "^5.90.0",
     "@types/node": "^20.9.0",
     "@types/react": "^19.0.0",
+    "@types/three": "0.186.0",
     "@typescript/native-preview": "7.0.0-dev.20260423.1",
     "oxfmt": "0.46.0",
     "oxlint": "1.61.0",
