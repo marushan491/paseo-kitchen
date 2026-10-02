@@ -1,3 +1,4 @@
+import { stageForRole, stationPosition, type KitchenStationId } from "./kitchen-stations.js";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { TeamState } from "../shared/factory-contracts.js";
 import { readAgentRoutingNotice } from "../shared/agent-routing.js";
@@ -24,6 +25,10 @@ export interface OfficeDesk {
   tone: "active" | "attention" | "settled" | "unknown";
   lane: number;
   seat: number;
+  stationId: KitchenStationId;
+  elapsedMs?: number;
+  recentActivity?: string;
+  instructions?: string;
 }
 
 export function projectOffice(
@@ -32,17 +37,19 @@ export function projectOffice(
 ): OfficeDesk[] {
   const desks: Omit<OfficeDesk, "lane" | "seat">[] = [];
   for (const state of [...teams].sort((a, b) => a.team.id.localeCompare(b.team.id))) {
+    if (state.team.status === "done" || state.team.status === "canceled") continue;
     desks.push(headDesk(state, agents));
     for (const binding of Object.values(state.bindings).sort((a, b) => a.id.localeCompare(b.id))) {
+      if (binding.status === "revoked" || binding.turn === "reported") continue;
       desks.push(workerDesk(state, binding, agents));
     }
   }
-  const roles = [...new Set(desks.map((desk) => desk.role))].sort((a, b) => compareRoles(a, b));
+  const roles = [...new Set(desks.map((desk) => desk.stationId))];
   const seats = new Map<string, number>();
   return desks.map((desk) => {
-    const seat = seats.get(desk.role) || 0;
-    seats.set(desk.role, seat + 1);
-    return Object.assign({}, desk, { lane: roles.indexOf(desk.role), seat });
+    const seat = seats.get(desk.stationId) || 0;
+    seats.set(desk.stationId, seat + 1);
+    return Object.assign({}, desk, { lane: roles.indexOf(desk.stationId), seat });
   });
 }
 
@@ -58,6 +65,7 @@ function headDesk(
     teamTitle: state.team.title,
     agentId: state.team.bossAgentId,
     role: "Head Chef",
+    stationId: "head",
     title: agent?.title || state.team.title,
     workItem: root?.title || state.team.title,
     phase: root?.phase || state.team.status,
@@ -84,6 +92,14 @@ function workerDesk(
     agentId: binding.agentId,
     bindingId: binding.id,
     role: binding.role,
+    stationId: stageForRole(
+      binding.role,
+      binding.phase,
+      item?.board === "root" && state.team.packId !== "kitchen-single",
+    ),
+    elapsedMs: binding.activeMs,
+    recentActivity: binding.lastEventAt,
+    instructions: profile?.instructions,
     title: worker?.title || binding.role,
     workItem: item?.title || binding.workItemId,
     phase: binding.phase,
@@ -94,13 +110,6 @@ function workerDesk(
     observed: Boolean(worker),
     tone: binding.status === "revoked" ? "settled" : agentTone(worker),
   };
-}
-
-function compareRoles(a: string, b: string) {
-  if (a === b) return 0;
-  if (a === "Head Chef") return -1;
-  if (b === "Head Chef") return 1;
-  return a.localeCompare(b);
 }
 
 export function officeToneColor(
@@ -133,6 +142,6 @@ export function officeAgentIds(teams: readonly TeamState[]): string[] {
   return [...new Set(projectOffice(teams).map((desk) => desk.agentId))].sort();
 }
 
-export function officePosition(desk: Pick<OfficeDesk, "lane" | "seat">) {
-  return { x: desk.seat * 3.4, z: desk.lane * 4.2 };
+export function officePosition(desk: Pick<OfficeDesk, "stationId" | "seat">) {
+  return stationPosition(desk.stationId, desk.seat);
 }

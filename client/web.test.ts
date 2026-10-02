@@ -1,4 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  clampZoom,
+  kitchenStations,
+  stageForRole,
+  stationPosition,
+  travelDuration,
+  travelPosition,
+} from "./kitchen-stations.js";
 import { mountOffice, type OfficePalette } from "./web.js";
 
 const platform = vi.hoisted(() => ({ OS: "android" }));
@@ -18,13 +26,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("evaluates Three and returns native role view without touching DOM globals", () => {
+it("evaluates Three and returns native map without touching DOM globals", () => {
   vi.stubGlobal("document", undefined);
   vi.stubGlobal("window", undefined);
   vi.stubGlobal("ResizeObserver", undefined);
   expect(mountOffice(null, palette, vi.fn(), vi.fn())).toMatchObject({
     status: "unavailable",
-    reason: expect.stringContaining("Role view"),
+    reason: expect.stringContaining("Native map"),
   });
 });
 
@@ -50,7 +58,7 @@ it("preflights unavailable WebGL2 without renderer errors and removes the unatta
   const host = { appendChild: vi.fn() };
   expect(mountOffice(host, palette, vi.fn(), vi.fn())).toEqual({
     status: "unavailable",
-    reason: "WebGL2 is unavailable. Role view is active.",
+    reason: "WebGL2 is unavailable. Native map and Stages remain available.",
   });
   expect(canvas.remove).toHaveBeenCalledOnce();
   expect(canvas.getContext).toHaveBeenCalledExactlyOnceWith("webgl2", {
@@ -59,4 +67,28 @@ it("preflights unavailable WebGL2 without renderer errors and removes the unatta
   });
   expect(error).not.toHaveBeenCalled();
   expect(host.appendChild).not.toHaveBeenCalled();
+});
+
+it("keeps seven stable stages while mapping actual role transitions and bounded motion", () => {
+  expect(kitchenStations.map((station) => station.id)).toEqual([
+    "head",
+    "plan",
+    "build",
+    "review",
+    "verify",
+    "integrate",
+    "final",
+  ]);
+  expect(stageForRole("Verifier", "verify", true)).toBe("final");
+  expect(stageForRole("Verifier", "verify", false)).toBe("verify");
+  expect(stageForRole("Integrator", "implement")).toBe("integrate");
+  expect(stageForRole("Integrator", "integrate")).toBe("integrate");
+  const from = stationPosition("build");
+  const to = stationPosition("review");
+  expect(travelPosition(from, to, 0, false)).toEqual(from);
+  expect(travelPosition(from, to, 1, false)).toEqual(to);
+  expect(travelPosition(from, to, 0.2, true)).toEqual(to);
+  expect(travelDuration(0)).toBe(400);
+  expect(travelDuration(100)).toBe(900);
+  expect([clampZoom(20), clampZoom(250)]).toEqual([60, 180]);
 });

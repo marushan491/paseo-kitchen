@@ -97,16 +97,18 @@ describe("Office authoritative projection", () => {
     });
   });
 
-  it("retains revoked binding evidence without portraying it as active work", () => {
+  it("drops revoked and reported cooks from the map without removing mission evidence", () => {
     const state = kitchen();
     state.bindings.worker.status = "revoked";
-    const worker = projectOffice([state], { "worker-agent": agent({ status: "running" }) })[1];
-    expect(worker).toMatchObject({
-      bindingId: "worker",
-      agentId: "worker-agent",
-      activity: "Binding revoked",
-      tone: "settled",
-    });
+    expect(projectOffice([state], { "worker-agent": agent({ status: "running" }) })).toHaveLength(
+      1,
+    );
+    expect(state.bindings.worker.agentId).toBe("worker-agent");
+    state.bindings.worker.status = "active";
+    state.bindings.worker.turn = "reported";
+    expect(projectOffice([state])).toHaveLength(1);
+    state.team.status = "done";
+    expect(projectOffice([state])).toEqual([]);
   });
 
   it("keeps distinct team identities and deduplicates live agent subscriptions", () => {

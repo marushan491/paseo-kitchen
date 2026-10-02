@@ -1,45 +1,44 @@
 import { Platform } from "react-native";
 import {
   AmbientLight,
-  BoxGeometry,
-  CanvasTexture,
   Color,
-  CylinderGeometry,
   DirectionalLight,
   Group,
-  Mesh,
   MeshStandardMaterial,
   OrthographicCamera,
+  PCFSoftShadowMap,
+  PointLight,
   Raycaster,
   Scene,
-  SphereGeometry,
-  Sprite,
-  SpriteMaterial,
   Vector2,
+  Vector3,
   WebGLRenderer,
 } from "three";
-import { officeToneColor, type OfficeDesk } from "./office-model.js";
+import { officePosition, officeToneColor, type OfficeDesk } from "./office-model.js";
+import { clampZoom, travelDuration, travelPosition } from "./kitchen-stations.js";
+import { createKitchen, createPanda, disposeKitchen } from "./kitchen-scene.js";
 
-interface Pointer {
+interface Input {
   clientX: number;
   clientY: number;
-}
-interface TextContext {
-  fillStyle: string;
-  font: string;
-  textAlign: string;
-  textBaseline: string;
-  fillText(text: string, x: number, y: number): void;
+  pointerId?: number;
+  deltaX?: number;
+  deltaY?: number;
+  ctrlKey?: boolean;
+  shiftKey?: boolean;
+  key?: string;
+  preventDefault(): void;
 }
 interface Canvas {
-  width: number;
-  height: number;
-  style: { width: string; height: string; display: string; touchAction: string };
-  getContext(kind: "2d"): TextContext | null;
+  style: { width: string; height: string; display: string; touchAction: string; cursor: string };
   getContext(kind: "webgl2", attributes: { antialias: boolean; alpha: boolean }): unknown;
   getBoundingClientRect(): { left: number; top: number; width: number; height: number };
-  addEventListener(name: string, listener: (event: Pointer) => void): void;
-  removeEventListener(name: string, listener: (event: Pointer) => void): void;
+  addEventListener(
+    name: string,
+    listener: (event: Input) => void,
+    options?: { passive: boolean },
+  ): void;
+  removeEventListener(name: string, listener: (event: Input) => void): void;
   setAttribute(name: string, value: string): void;
   remove(): void;
 }
@@ -49,12 +48,16 @@ interface Container {
   appendChild(canvas: Canvas): void;
 }
 declare const document: { createElement(tag: "canvas"): Canvas };
-declare const window: { devicePixelRatio: number };
+declare const window: {
+  devicePixelRatio: number;
+  matchMedia?(query: string): { matches: boolean };
+};
 declare const ResizeObserver: new (callback: () => void) => {
   observe(container: Container): void;
   disconnect(): void;
 };
-
+declare function requestAnimationFrame(callback: () => void): number;
+declare function cancelAnimationFrame(id: number): void;
 export interface OfficePalette {
   background: string;
   surface: string;
@@ -64,45 +67,56 @@ export interface OfficePalette {
   danger: string;
   border: string;
 }
-
 export interface OfficeRenderer {
   update(desks: readonly OfficeDesk[], selectedId: string | null, palette: OfficePalette): void;
+  zoomTo(percent: number): void;
+  fit(): void;
   dispose(): void;
 }
-
 export type OfficeMountResult =
   | { status: "ready"; renderer: OfficeRenderer }
   | { status: "unavailable"; reason: string };
+interface Traveller {
+  group: Group;
+  from: { x: number; z: number };
+  to: { x: number; z: number };
+  started: number;
+  duration: number;
+}
 
 export function mountOffice(
   target: unknown,
   palette: OfficePalette,
   onSelect: (id: string) => void,
   onUnavailable: (reason: string) => void,
+  onZoom: (percent: number) => void = () => {},
 ): OfficeMountResult {
   if (Platform.OS !== "web")
     return {
       status: "unavailable",
-      reason: "3D is available on web and desktop. Role view is active.",
+      reason: "3D is available on web and desktop. Native map and Stages remain available.",
     };
   const container = target as Container | null;
-  if (!container || typeof container.appendChild !== "function")
+  if (
+    !container ||
+    typeof container.appendChild !== "function" ||
+    typeof document === "undefined" ||
+    typeof ResizeObserver === "undefined"
+  )
     return {
       status: "unavailable",
-      reason: "The 3D canvas could not be attached. Role view is active.",
+      reason: "The 3D canvas could not be attached. Native map and Stages remain available.",
     };
-  if (typeof document === "undefined" || typeof ResizeObserver === "undefined")
-    return {
-      status: "unavailable",
-      reason: "This client cannot host the 3D canvas. Role view is active.",
-    };
-  let renderer: WebGLRenderer;
   const canvas = document.createElement("canvas");
+  let renderer: WebGLRenderer;
   try {
     const context = canvas.getContext("webgl2", { antialias: true, alpha: false });
     if (!context) {
       canvas.remove();
-      return { status: "unavailable", reason: "WebGL2 is unavailable. Role view is active." };
+      return {
+        status: "unavailable",
+        reason: "WebGL2 is unavailable. Native map and Stages remain available.",
+      };
     }
     renderer = new WebGLRenderer({
       canvas: canvas as unknown as NonNullable<
@@ -114,285 +128,307 @@ export function mountOffice(
     });
   } catch {
     canvas.remove();
-    return { status: "unavailable", reason: "WebGL2 is unavailable. Role view is active." };
-  }
-  const scene = new Scene();
-  scene.background = new Color(palette.background);
-  const camera = new OrthographicCamera(-10, 10, 10, -10, 0.1, 300);
-  const raycaster = new Raycaster();
-  const pointer = new Vector2();
-  let objects = new Group();
-  let disposed = false;
-  let span = 10;
-  scene.add(new AmbientLight(0xffffff, 2.2));
-  const light = new DirectionalLight(0xffffff, 3);
-  light.position.set(6, 15, 8);
-  scene.add(light, objects);
-  canvas.style.width = "100%";
-  canvas.style.height = "100%";
-  canvas.style.display = "block";
-  canvas.style.touchAction = "pan-y";
-  canvas.setAttribute(
-    "aria-label",
-    "Kitchen 3D. Select an agent station, or use the accessible role list below.",
-  );
-  canvas.setAttribute("role", "img");
-  container.appendChild(canvas);
-
-  function render() {
-    if (disposed) return;
-    try {
-      renderer.render(scene, camera);
-    } catch {
-      dispose();
-      onUnavailable("The 3D renderer stopped. Role view is active.");
-    }
-  }
-  function resize() {
-    if (disposed) return;
-    const width = Math.max(1, container!.clientWidth);
-    const height = Math.max(1, container!.clientHeight);
-    const aspect = width / height;
-    camera.left = -span * aspect;
-    camera.right = span * aspect;
-    camera.top = span;
-    camera.bottom = -span;
-    camera.updateProjectionMatrix();
-    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-    renderer.setSize(width, height, false);
-    render();
-  }
-  function select(event: Pointer) {
-    if (disposed) return;
-    const bounds = canvas.getBoundingClientRect();
-    pointer.set(
-      ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * 2 - 1,
-      -((event.clientY - bounds.top) / Math.max(1, bounds.height)) * 2 + 1,
-    );
-    raycaster.setFromCamera(pointer, camera);
-    for (const hit of raycaster.intersectObjects(objects.children, true)) {
-      let object = hit.object;
-      while (object.parent && !object.userData.deskId) object = object.parent;
-      if (typeof object.userData.deskId === "string") {
-        onSelect(object.userData.deskId);
-        break;
-      }
-    }
-  }
-  const contextLost = () => {
-    dispose();
-    onUnavailable("WebGL context was lost. Role view is active.");
-  };
-  canvas.addEventListener("click", select);
-  canvas.addEventListener("webglcontextlost", contextLost);
-  const observer = new ResizeObserver(resize);
-  observer.observe(container);
-
-  function releaseObjects() {
-    objects.traverse((object) => {
-      if (object instanceof Mesh) object.geometry.dispose();
-      if (object instanceof Mesh || object instanceof Sprite) {
-        const materials = Array.isArray(object.material) ? object.material : [object.material];
-        for (const material of materials) {
-          if (material instanceof SpriteMaterial) material.map?.dispose();
-          material.dispose();
-        }
-      }
-    });
-    scene.remove(objects);
-  }
-  function dispose() {
-    if (disposed) return;
-    disposed = true;
-    observer.disconnect();
-    canvas.removeEventListener("click", select);
-    canvas.removeEventListener("webglcontextlost", contextLost);
-    releaseObjects();
-    renderer.dispose();
-    renderer.forceContextLoss();
-    canvas.remove();
-  }
-  function box(
-    group: Group,
-    color: string,
-    size: [number, number, number],
-    position: [number, number, number],
-  ) {
-    const mesh = new Mesh(
-      new BoxGeometry(...size),
-      new MeshStandardMaterial({ color, roughness: 0.85 }),
-    );
-    mesh.position.set(...position);
-    group.add(mesh);
-  }
-  function label(group: Group, text: string, x: number, y: number, z: number, color: string) {
-    const image = document.createElement("canvas");
-    image.width = 768;
-    image.height = 96;
-    const context = image.getContext("2d");
-    if (!context) return;
-    context.fillStyle = color;
-    context.font = "600 48px sans-serif";
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.fillText(text.slice(0, 38), 384, 48);
-    const map = new CanvasTexture(
-      image as unknown as ConstructorParameters<typeof CanvasTexture>[0],
-    );
-    const sprite = new Sprite(new SpriteMaterial({ map, transparent: true, depthTest: false }));
-    sprite.position.set(x, y, z);
-    sprite.scale.set(3.2, 0.5, 1);
-    group.add(sprite);
+    return {
+      status: "unavailable",
+      reason: "WebGL2 is unavailable. Native map and Stages remain available.",
+    };
   }
   return {
     status: "ready",
-    renderer: {
-      update(desks, selectedId, colors) {
-        if (disposed) return;
-        releaseObjects();
-        objects = new Group();
-        scene.add(objects);
-        scene.background = new Color(colors.background);
-        const stationRoles = ["Head Chef", "po", "developer", "reviewer", "verifier", "integrator"];
-        const stations = desks.length
-          ? desks
-          : stationRoles.map((role) => ({
-              role,
-              title: stationTitle(role),
-              id: "",
-              tone: "unknown" as const,
-            }));
-        const columns = Math.min(3, Math.max(1, stations.length));
-        const rows = Math.ceil(stations.length / columns);
-        const width = columns * 3.4;
-        const depth = rows * 4.2;
-        const centerFloorX = width / 2 - 1.7;
-        const centerFloorZ = depth / 2 - 2.1;
-        box(
-          objects,
-          colors.border,
-          [width + 2, 0.18, depth + 2],
-          [centerFloorX, -0.1, centerFloorZ],
-        );
-        for (let col = 0; col < columns * 3 + 2; col++) {
-          for (let row = 0; row < rows * 4 + 2; row++) {
-            box(
-              objects,
-              (col + row) % 2 ? colors.surface : colors.border,
-              [1.04, 0.02, 1.04],
-              [col * 1.1 - 2.1, 0.01, row * 1.05 - 2.6],
-            );
-          }
-        }
-        box(objects, colors.surface, [width + 2, 2.7, 0.14], [centerFloorX, 1.3, -3.15]);
-        box(objects, colors.surface, [0.14, 2.7, depth + 2], [-2.8, 1.3, centerFloorZ]);
-        for (let i = 0; i < stations.length; i++) {
-          const desk = stations[i]!;
-          const x = (i % columns) * 3.4;
-          const z = Math.floor(i / columns) * 4.2;
-          const group = new Group();
-          group.position.set(x, 0, z);
-          if (desk.id) group.userData.deskId = desk.id;
-          objects.add(group);
-          const statusColor = officeToneColor(desk.tone, colors);
-          box(
-            group,
-            desk.id === selectedId ? colors.accent : colors.border,
-            [2.6, 0.12, 2.65],
-            [0, 0.08, 0],
-          );
-          box(group, colors.surface, [2.25, 0.85, 1.1], [0, 0.5, -0.4]);
-          box(group, "#9ba4ab", [2.35, 0.12, 1.18], [0, 0.98, -0.4]);
-          box(group, colors.border, [0.03, 0.6, 0.02], [0, 0.5, 0.16]);
-          box(group, "#9ba4ab", [0.35, 0.06, 0.05], [-0.5, 0.68, 0.2]);
-          box(group, "#9ba4ab", [0.35, 0.06, 0.05], [0.5, 0.68, 0.2]);
-          const role = desk.role.toLowerCase();
-          if (role === "developer" || role === "integrator") {
-            box(group, "#26313a", [1.3, 0.04, 0.9], [0, 1.06, -0.4]);
-            for (const burnerX of [-0.34, 0.34]) {
-              const burner = new Mesh(
-                new CylinderGeometry(0.24, 0.24, 0.03, 24),
-                new MeshStandardMaterial({ color: "#627079" }),
-              );
-              burner.position.set(burnerX, 1.1, -0.45);
-              group.add(burner);
-            }
-            const pot = new Mesh(
-              new CylinderGeometry(0.26, 0.24, 0.28, 24),
-              new MeshStandardMaterial({ color: "#bcc5cb", metalness: 0.5, roughness: 0.3 }),
-            );
-            pot.position.set(-0.34, 1.25, -0.45);
-            group.add(pot);
-            box(group, "#9ba4ab", [1.65, 0.16, 0.9], [0, 2.35, -0.4]);
-            box(group, colors.border, [0.6, 0.5, 0.45], [0, 2.67, -0.6]);
-          } else if (role === "verifier" || role === "tester") {
-            box(group, "#42505c", [1.0, 0.03, 0.72], [0, 1.07, -0.4]);
-            box(group, "#d4dde3", [0.1, 0.45, 0.1], [0.5, 1.28, -0.78]);
-            box(group, "#d4dde3", [0.35, 0.08, 0.1], [0.35, 1.5, -0.78]);
-          } else if (role === "reviewer") {
-            for (const plateX of [-0.5, 0.15, 0.7]) {
-              const plate = new Mesh(
-                new CylinderGeometry(0.24, 0.2, 0.04, 24),
-                new MeshStandardMaterial({ color: "#eceee8" }),
-              );
-              plate.position.set(plateX, 1.09, -0.4);
-              group.add(plate);
-            }
-          } else {
-            box(group, "#ad8060", [1.25, 0.05, 0.7], [0, 1.07, -0.4]);
-            box(group, "#dde1d4", [0.3, 0.04, 0.3], [-0.3, 1.12, -0.4]);
-            box(group, colors.border, [1.6, 0.75, 0.08], [0, 1.8, -1]);
-            for (const ticketX of [-0.45, 0, 0.45])
-              box(group, "#e8e5d8", [0.28, 0.45, 0.03], [ticketX, 1.8, -0.94]);
-          }
-          if (desk.id) {
-            const body = new Mesh(
-              new CylinderGeometry(0.22, 0.3, 0.65, 12),
-              new MeshStandardMaterial({ color: statusColor }),
-            );
-            body.position.set(0, 0.75, 0.7);
-            group.add(body);
-            const head = new Mesh(
-              new SphereGeometry(0.22, 16, 12),
-              new MeshStandardMaterial({ color: "#dbc4ac" }),
-            );
-            head.position.set(0, 1.3, 0.7);
-            group.add(head);
-            const hat = new Mesh(
-              new CylinderGeometry(0.27, 0.22, 0.3, 16),
-              new MeshStandardMaterial({ color: "#f0efe9" }),
-            );
-            hat.position.set(0, 1.6, 0.7);
-            group.add(hat);
-            for (const legX of [-0.15, 0.15])
-              box(group, colors.border, [0.16, 0.4, 0.18], [legX, 0.32, 0.7]);
-          }
-          label(group, stationTitle(desk.role), 0, 0.2, 1.55, colors.foreground);
-        }
-        const centerX = width / 2 - 1.7;
-        const centerZ = depth / 2 - 2.1;
-        camera.position.set(centerX + 14, 20, centerZ + 20);
-        camera.lookAt(centerX, 0, centerZ);
-        span = Math.max(6, (width + depth) * 0.32);
-        resize();
-      },
-      dispose,
-    },
+    renderer: new KitchenViewport(
+      container,
+      canvas,
+      renderer,
+      palette,
+      onSelect,
+      onUnavailable,
+      onZoom,
+    ),
   };
 }
-
-function stationTitle(role: string) {
-  return (
-    (
-      {
-        "Head Chef": "Head Chef · Coordination",
-        po: "Prep · Planning",
-        developer: "Stove · Build",
-        reviewer: "Plating · Review",
-        verifier: "Quality · Verify",
-        integrator: "Pass · Integration",
-        tester: "Quality · Tests",
-      } as Record<string, string>
-    )[role] || role
+class KitchenViewport implements OfficeRenderer {
+  private scene = new Scene();
+  private camera = new OrthographicCamera(-10, 10, 10, -10, 0.1, 100);
+  private ray = new Raycaster();
+  private pointer = new Vector2();
+  private target = new Vector3(0, 0, 1);
+  private room: ReturnType<typeof createKitchen>;
+  private travellers = new Map<string, Traveller>();
+  private observer: InstanceType<typeof ResizeObserver>;
+  private disposed = false;
+  private percent = 100;
+  private span = 8;
+  private frame: number | null = null;
+  private fingers = new Map<number, { x: number; y: number }>();
+  private previousDistance = 0;
+  private dragDistance = 0;
+  private ignoreClick = false;
+  private reduced = Boolean(
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
   );
+  constructor(
+    private container: Container,
+    private canvas: Canvas,
+    private renderer: WebGLRenderer,
+    private palette: OfficePalette,
+    private onSelect: (id: string) => void,
+    private onUnavailable: (reason: string) => void,
+    private onZoom: (percent: number) => void,
+  ) {
+    this.scene.background = new Color(palette.background);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = PCFSoftShadowMap;
+    this.scene.add(new AmbientLight(0xd8e0ef, 1.2));
+    const light = new DirectionalLight(0xfff2df, 3);
+    light.position.set(4, 12, 7);
+    light.castShadow = true;
+    light.shadow.mapSize.set(1024, 1024);
+    light.shadow.camera.left = -12;
+    light.shadow.camera.right = 12;
+    light.shadow.camera.top = 12;
+    light.shadow.camera.bottom = -12;
+    light.shadow.bias = -0.002;
+    this.scene.add(light);
+    for (const x of [-4, 0, 4]) {
+      const warm = new PointLight(0xffcb82, 8, 8, 2);
+      warm.position.set(x, 2.1, -6.2);
+      this.scene.add(warm);
+    }
+    this.room = createKitchen(palette);
+    this.scene.add(this.room.room);
+    canvas.style.width = "100%";
+    canvas.style.height = "100%";
+    canvas.style.display = "block";
+    canvas.style.touchAction = "none";
+    canvas.style.cursor = "grab";
+    canvas.setAttribute(
+      "aria-label",
+      "Interactive Kitchen map. Drag to pan, wheel or pinch to zoom. Use Stages for keyboard station selection.",
+    );
+    canvas.setAttribute("role", "img");
+    canvas.setAttribute("tabindex", "0");
+    container.appendChild(canvas);
+    this.camera.position.set(13, 18, 19);
+    this.camera.lookAt(this.target);
+    this.observer = new ResizeObserver(() => this.resize());
+    this.observer.observe(container);
+    canvas.addEventListener("click", this.select);
+    canvas.addEventListener("pointerdown", this.down);
+    canvas.addEventListener("pointermove", this.move);
+    canvas.addEventListener("pointerup", this.up);
+    canvas.addEventListener("pointercancel", this.up);
+    canvas.addEventListener("pointerleave", this.up);
+    canvas.addEventListener("wheel", this.wheel, { passive: false });
+    canvas.addEventListener("keydown", this.key);
+    canvas.addEventListener("webglcontextlost", this.lost);
+    this.fit();
+  }
+  private render() {
+    if (this.disposed) return;
+    try {
+      this.renderer.render(this.scene, this.camera);
+    } catch {
+      this.dispose();
+      this.onUnavailable("The 3D renderer stopped. Native map and Stages remain available.");
+    }
+  }
+  private resize() {
+    if (this.disposed) return;
+    const width = Math.max(1, this.container.clientWidth),
+      height = Math.max(1, this.container.clientHeight);
+    const aspect = width / height;
+    const span = (this.span * 100) / this.percent;
+    this.camera.left = -span * aspect;
+    this.camera.right = span * aspect;
+    this.camera.top = span;
+    this.camera.bottom = -span;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    this.renderer.setSize(width, height, false);
+    this.render();
+  }
+  zoomTo(percent: number) {
+    this.percent = clampZoom(percent);
+    this.onZoom(this.percent);
+    this.resize();
+  }
+  fit() {
+    this.percent = 100;
+    this.span = Math.max(
+      7.8,
+      10 / Math.max(0.5, this.container.clientWidth / Math.max(1, this.container.clientHeight)),
+    );
+    this.camera.position.set(13, 18, 20);
+    this.target.set(0, 0, 1);
+    this.camera.lookAt(this.target);
+    this.onZoom(100);
+    this.resize();
+  }
+  private pan(dx: number, dy: number) {
+    const scale = (this.span * 2 * 100) / this.percent / Math.max(1, this.container.clientHeight);
+    const right = new Vector3().setFromMatrixColumn(this.camera.matrix, 0);
+    const up = new Vector3().setFromMatrixColumn(this.camera.matrix, 1);
+    const offset = right.multiplyScalar(-dx * scale).add(up.multiplyScalar(dy * scale));
+    this.camera.position.add(offset);
+    this.target.add(offset);
+    this.render();
+  }
+  private down = (event: Input) => {
+    this.fingers.set(event.pointerId || 0, { x: event.clientX, y: event.clientY });
+    this.dragDistance = 0;
+    this.canvas.style.cursor = "grabbing";
+  };
+  private move = (event: Input) => {
+    const id = event.pointerId || 0,
+      previous = this.fingers.get(id);
+    if (!previous) return;
+    const dx = event.clientX - previous.x,
+      dy = event.clientY - previous.y;
+    this.fingers.set(id, { x: event.clientX, y: event.clientY });
+    this.dragDistance += Math.abs(dx) + Math.abs(dy);
+    if (this.fingers.size === 2) {
+      const [a, b] = [...this.fingers.values()];
+      const distance = Math.hypot(a.x - b.x, a.y - b.y);
+      if (this.previousDistance) this.zoomTo((this.percent * distance) / this.previousDistance);
+      this.previousDistance = distance;
+    } else this.pan(dx, dy);
+  };
+  private up = () => {
+    this.fingers.clear();
+    this.previousDistance = 0;
+    this.ignoreClick = this.dragDistance > 5;
+    this.canvas.style.cursor = "grab";
+  };
+  private wheel = (event: Input) => {
+    event.preventDefault();
+    if (event.shiftKey || Math.abs(event.deltaX || 0) > Math.abs(event.deltaY || 0))
+      this.pan(event.deltaX || 0, event.deltaY || 0);
+    else this.zoomTo(this.percent * Math.exp(-(event.deltaY || 0) * 0.002));
+  };
+  private key = (event: Input) => {
+    const key = event.key;
+    if (key === "+" || key === "=") this.zoomTo(this.percent + 10);
+    else if (key === "-") this.zoomTo(this.percent - 10);
+    else if (key === "0") this.fit();
+    else if (key?.startsWith("Arrow")) {
+      event.preventDefault();
+      this.pan(
+        ({ ArrowLeft: 30, ArrowRight: -30 } as Record<string, number>)[key] ?? 0,
+        ({ ArrowUp: 30, ArrowDown: -30 } as Record<string, number>)[key] ?? 0,
+      );
+    }
+  };
+  private select = (event: Input) => {
+    if (this.ignoreClick) {
+      this.ignoreClick = false;
+      return;
+    }
+    const bounds = this.canvas.getBoundingClientRect();
+    this.pointer.set(
+      ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * 2 - 1,
+      (-(event.clientY - bounds.top) / Math.max(1, bounds.height)) * 2 + 1,
+    );
+    this.ray.setFromCamera(this.pointer, this.camera);
+    for (const hit of this.ray.intersectObjects(this.scene.children, true)) {
+      let object = hit.object;
+      while (object.parent && !object.userData.selectionId) object = object.parent;
+      if (typeof object.userData.selectionId === "string") {
+        this.onSelect(object.userData.selectionId);
+        return;
+      }
+    }
+  };
+  private lost = () => {
+    this.dispose();
+    this.onUnavailable("WebGL context was lost. Native map and Stages remain available.");
+  };
+  update(desks: readonly OfficeDesk[], selectedId: string | null, palette: OfficePalette) {
+    if (this.disposed) return;
+    this.palette = palette;
+    const desired = new Set(desks.map((desk) => desk.agentId));
+    for (const [id, traveller] of this.travellers)
+      if (!desired.has(id)) {
+        disposeKitchen(traveller.group);
+        this.travellers.delete(id);
+      }
+    desks.forEach((desk, index) => this.updateTraveller(desk, index));
+    for (const [id, ring] of this.room.stations) {
+      const material = ring.material as MeshStandardMaterial;
+      const selected =
+        selectedId === `station:${id}` ||
+        desks.some((desk) => desk.stationId === id && selectedId === `agent:${desk.agentId}`);
+      const working = desks.some((desk) => desk.stationId === id && desk.tone === "active");
+      const attention = desks.some((desk) => desk.stationId === id && desk.tone === "attention");
+      const color = attention ? palette.danger : palette.accent;
+      material.color.set(selected || working || attention ? color : palette.border);
+      material.emissive.set(selected || working || attention ? color : "#000000");
+      material.emissiveIntensity = selected ? 0.7 : 0.25;
+    }
+    this.render();
+    if (this.frame !== null) cancelAnimationFrame(this.frame);
+    this.animate();
+  }
+  private updateTraveller(desk: OfficeDesk, index: number) {
+    const to = officePosition(desk);
+    let traveller = this.travellers.get(desk.agentId);
+    if (!traveller) {
+      const group = createPanda(officeToneColor(desk.tone, this.palette));
+      group.userData.selectionId = `agent:${desk.agentId}`;
+      group.position.set(to.x, 0, to.z);
+      this.scene.add(group);
+      traveller = { group, from: to, to, started: 0, duration: 0 };
+      this.travellers.set(desk.agentId, traveller);
+      return;
+    }
+    traveller.group.traverse((object) => {
+      if (!object.userData.apron) return;
+      const material = (object as import("three").Mesh).material as MeshStandardMaterial;
+      material.color.set(officeToneColor(desk.tone, this.palette));
+    });
+    if (traveller.to.x === to.x && traveller.to.z === to.z) return;
+    traveller.from = { x: traveller.group.position.x, z: traveller.group.position.z };
+    traveller.to = to;
+    traveller.started = Date.now() + (index % 6) * 100;
+    traveller.duration = this.reduced
+      ? 0
+      : travelDuration(Math.hypot(to.x - traveller.from.x, to.z - traveller.from.z));
+  }
+  private animate = () => {
+    this.frame = null;
+    if (this.disposed) return;
+    let moving = false;
+    const now = Date.now();
+    for (const value of this.travellers.values()) {
+      const progress = value.duration ? Math.max(0, (now - value.started) / value.duration) : 1;
+      const point = travelPosition(value.from, value.to, progress, this.reduced);
+      value.group.position.set(point.x, 0, point.z);
+      if (progress < 1) moving = true;
+    }
+    this.render();
+    if (moving) this.frame = requestAnimationFrame(this.animate);
+  };
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.frame !== null) cancelAnimationFrame(this.frame);
+    this.observer.disconnect();
+    for (const [name, listener] of Object.entries({
+      click: this.select,
+      pointerdown: this.down,
+      pointermove: this.move,
+      pointerup: this.up,
+      pointercancel: this.up,
+      pointerleave: this.up,
+      wheel: this.wheel,
+      keydown: this.key,
+      webglcontextlost: this.lost,
+    }))
+      this.canvas.removeEventListener(name, listener);
+    disposeKitchen(this.room.room);
+    for (const traveller of this.travellers.values()) disposeKitchen(traveller.group);
+    this.renderer.dispose();
+    this.renderer.forceContextLoss();
+    this.canvas.remove();
+  }
 }
