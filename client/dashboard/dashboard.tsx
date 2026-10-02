@@ -7,6 +7,10 @@ import { Board } from "./board.js";
 import { InboxCard } from "./inbox.js";
 import { type DashboardState, useDashboard } from "./state.js";
 import { Action, useDashboardStyles } from "./ui.js";
+import { factoryList } from "../../shared/factory-contracts.js";
+import { kitchenHumanRequests } from "../../shared/dashboard/kitchen-scope.js";
+import { useRpc } from "@getpaseo/plugin/client";
+import { useQuery } from "@tanstack/react-query";
 import { partitionInbox } from "../../shared/dashboard/overview.js";
 
 export type DashboardProps = PluginSurfaceProps & {
@@ -18,6 +22,16 @@ export type DashboardProps = PluginSurfaceProps & {
 export function Dashboard(props: DashboardProps) {
   const styles = useDashboardStyles(props);
   const allState = useDashboard(props);
+  const listTeams = useRpc(factoryList);
+  const teams = useQuery({
+    queryKey: ["factory", "teams"],
+    queryFn: () => listTeams({}),
+    refetchInterval: 4000,
+    refetchIntervalInBackground: false,
+  });
+  const requests = kitchenHumanRequests(teams.data?.teams ?? [], props.projectPath).filter(
+    (request) => (allState.snapshot?.preferences.snoozedUntil[request.id] ?? 0) <= Date.now(),
+  );
   const state = useMemo(() => {
     const sessions = allState.sessions.filter(
       (session) =>
@@ -52,6 +66,15 @@ export function Dashboard(props: DashboardProps) {
   const refresh = useCallback(() => {
     void state.refresh();
   }, [state]);
+  const { teamNavigation } = props;
+  const { snooze } = allState;
+  const openMission = useCallback((id: string) => teamNavigation?.(id), [teamNavigation]);
+  const snoozeMission = useCallback(
+    (id: string) => {
+      void snooze(id, "hour");
+    },
+    [snooze],
+  );
   const running = state.sessions.reduce(
     (count, session) => count + session.agents.filter((agent) => agent.bucket === "running").length,
     0,
@@ -77,14 +100,15 @@ export function Dashboard(props: DashboardProps) {
           ) : null}
         </View>
         <Text style={styles.muted}>
-          {needsYou.length} need attention · {running} working · {problems.length} problems
+          {needsYou.length + requests.length} need attention · {running} working · {problems.length}{" "}
+          problems
         </Text>
       </View>
       <Text style={styles.muted}>
         {
           {
             overview:
-              "Answer questions and review handoffs. Kitchen keeps working when no decision is needed.",
+              "Questions, permissions and acceptance for Kitchen missions only. Ordinary chats stay in Paseo.",
             activity: "Live workspaces and planned runs for your selected project scope.",
             problems: "Failed runs and blocked checks, with links to the affected work.",
           }[section]
@@ -93,16 +117,41 @@ export function Dashboard(props: DashboardProps) {
       {state.loading ? <Text style={styles.muted}>Loading agents and workspaces…</Text> : null}
       {section === "overview" ? (
         <View style={styles.stack}>
-          <Text style={styles.heading}>Needs you · {needsYou.length}</Text>
+          <Text style={styles.heading}>Needs you · {needsYou.length + requests.length}</Text>
           {state.inbox.snoozedCount ? (
             <Text style={styles.muted}>
               {state.inbox.snoozedCount} snoozed until their wake time
             </Text>
           ) : null}
+          {requests.map(({ state: mission, item, id, ready, reason }) => (
+            <View key={id} style={styles.card}>
+              <Text style={styles.heading}>
+                {ready ? "Ready for acceptance" : "Question"} · {mission.team.title}
+              </Text>
+              <Text style={styles.muted}>{item.title}</Text>
+              <Text style={styles.text}>{reason}</Text>
+              <View style={styles.row}>
+                <Action
+                  theme={props.theme}
+                  title={ready ? "Review result" : "Open mission and reply"}
+                  value={mission.team.id}
+                  onAction={openMission}
+                  variant="primary"
+                  disabled={!props.teamNavigation}
+                />
+                <Action
+                  theme={props.theme}
+                  title="Snooze one hour"
+                  value={id}
+                  onAction={snoozeMission}
+                />
+              </View>
+            </View>
+          ))}
           {needsYou.map((item) => (
             <InboxCard key={item.id} {...props} item={item} state={state} />
           ))}
-          {!needsYou.length && !state.loading ? (
+          {!needsYou.length && !requests.length && !state.loading ? (
             <Text style={styles.muted}>Nothing needs your attention.</Text>
           ) : null}
         </View>
@@ -130,16 +179,6 @@ export function Dashboard(props: DashboardProps) {
           onOpenTeam={props.teamNavigation}
         />
       ) : null}
-      {section === "activity"
-        ? state.inventories
-            .filter((host) => !state.snapshot?.scheduleHostIds.includes(host.serverId))
-            .map((host) => (
-              <Text key={host.serverId} style={styles.muted}>
-                Schedule monitoring not configured for {host.label}. Add its explicit endpoint in
-                Overview settings.
-              </Text>
-            ))
-        : null}
     </ScrollView>
   );
 }

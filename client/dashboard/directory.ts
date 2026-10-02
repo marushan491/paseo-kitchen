@@ -1,11 +1,6 @@
 import { readAgentRoutingNotice } from "../../shared/agent-routing.js";
-import type { PaseoApi, PaseoAgent, PaseoWorkspace, PaseoAgentListResult } from "@getpaseo/client";
-import {
-  getPaseoClient,
-  useHosts,
-  usePaseo,
-  type PluginSurfaceProps,
-} from "@getpaseo/plugin/client";
+import type { PaseoApi, PaseoAgent, PaseoWorkspace } from "@getpaseo/client";
+import { usePaseo, type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import {
@@ -13,6 +8,7 @@ import {
   groupRootAgentsByWorkspace,
   type LeitstandSession,
 } from "../../shared/dashboard/session-model.js";
+import { STATUS_BUCKET_ORDER } from "../../shared/dashboard/projection-types.js";
 import type { Agent, WorkspaceDescriptor } from "../../shared/dashboard/projection-types.js";
 import type { Preferences } from "../../shared/dashboard/contracts.js";
 
@@ -42,124 +38,86 @@ export interface HostInventory {
   complete: boolean;
 }
 
-export async function readDirectory(
-  api: PaseoApi,
-  keep: (release: () => Promise<void>) => void,
-  subscribe = true,
-) {
-  const workspaces: PaseoWorkspace[] = [];
+export async function readDirectory(api: PaseoApi, agentIds: readonly string[]) {
   const agents: PaseoAgent[] = [];
-  let cursor: string | undefined;
-  for (let page = 0; page < 10; page++) {
-    const result = await api.workspaces.list({
-      page: { limit: 200, cursor },
-      ...(page === 0 && subscribe ? { subscribe: {} } : {}),
-    });
-    if (result.subscription) keep(() => result.subscription!.release());
-    workspaces.push(...result.entries);
-    cursor = result.pageInfo.nextCursor ?? undefined;
-    if (!cursor) break;
+  for (let offset = 0; offset < agentIds.length; offset += 8) {
+    const results = await Promise.all(
+      agentIds.slice(offset, offset + 8).map((id) => api.agents.ref(id).refresh()),
+    );
+    agents.push(...results.flatMap((entry) => (entry ? [entry.agent] : [])));
   }
-  const workspacesComplete = !cursor;
-  cursor = undefined;
-  for (let page = 0; page < 10; page++) {
-    const result: PaseoAgentListResult = await api.agents.list({
-      page: { limit: 200, cursor },
-      ...(page === 0 && subscribe ? { subscribe: {} } : {}),
-    });
-    if (result.subscription) keep(() => result.subscription!.release());
-    agents.push(...result.entries.map((entry) => entry.agent));
-    cursor = result.pageInfo.nextCursor ?? undefined;
-    if (!cursor) break;
+  const workspaceIds = [
+    ...new Set(agents.flatMap((agent) => (agent.workspaceId ? [agent.workspaceId] : []))),
+  ];
+  const workspaces: PaseoWorkspace[] = [];
+  for (let offset = 0; offset < workspaceIds.length; offset += 8) {
+    const results = await Promise.all(
+      workspaceIds.slice(offset, offset + 8).map((id) => api.workspaces.ref(id).refresh()),
+    );
+    workspaces.push(...results.flatMap((entry) => (entry ? [entry] : [])));
   }
-  return { workspaces, agents, complete: workspacesComplete && !cursor };
+  return { workspaces, agents, complete: true };
 }
 
-export function useDirectory(props: PluginSurfaceProps) {
+export function useDirectory(
+  props: PluginSurfaceProps,
+  agentIds: readonly string[],
+  ready: boolean,
+) {
   const own = usePaseo();
-  const hosts = useHosts();
   const [inventories, setInventories] = useState<HostInventory[]>([]);
   const [loading, setLoading] = useState(true);
+  const membership = JSON.stringify(agentIds);
   useEffect(() => {
     let disposed = false;
     let pending = false;
-    let queued = false;
-    let debounce: ReturnType<typeof setTimeout> | undefined;
-    let releases: (() => Promise<void>)[] = [];
-    const configured = hosts.length
-      ? hosts
-      : [{ serverId: props.host.id, label: props.host.label, status: "online" as const }];
-    const clients = configured.map((host) => {
-      try {
-        return { host, api: host.serverId === props.host.id ? own : getPaseoClient(host.serverId) };
-      } catch {
-        return { host, api: null };
-      }
-    });
-    async function refresh() {
-      if (disposed) return;
-      if (pending) {
-        queued = true;
-        return;
-      }
-      pending = true;
-      queued = false;
-      const nextReleases: (() => Promise<void>)[] = [];
-      const next = await Promise.all(
-        clients.map(async ({ host, api }): Promise<HostInventory> => {
-          const initial = {
-            serverId: host.serverId,
-            label: host.label,
-            workspaces: [],
-            agents: [],
-            complete: false,
-          };
-          if (!api || host.status !== "online")
-            return { ...initial, error: `Host ${host.label} is ${host.status}` };
-          try {
-            const directory = await readDirectory(
-              api,
-              (release) => nextReleases.push(release),
-              releases.length === 0,
-            );
-            return { ...initial, ...directory, error: null };
-          } catch (error) {
-            return {
-              ...initial,
-              error: error instanceof Error ? error.message : "Directory unavailable",
-            };
-          }
-        }),
-      );
-      releases.push(...nextReleases);
-      pending = false;
-      if (disposed) {
-        await Promise.all(releases.map((release) => release().catch(() => undefined)));
-        return;
-      }
-      setInventories(next);
-      setLoading(false);
-      if (queued) void refresh();
-    }
+    setInventories([]);
+    setLoading(true);
+    if (!ready) return;
+    const ids: string[] = JSON.parse(membership);
     const changed = () => {
-      clearTimeout(debounce);
-      debounce = setTimeout(() => {
-        void refresh();
-      }, 500);
+      void refresh();
     };
-    const unsubscribe = clients.flatMap(({ api }) =>
-      api ? [api.workspaces.subscribe(changed), api.agents.subscribe(changed)] : [],
-    );
-    const backstop = setInterval(changed, 30_000);
+    async function refresh() {
+      if (disposed || pending) return;
+      pending = true;
+      let next: HostInventory;
+      try {
+        next = {
+          serverId: props.host.id,
+          label: props.host.label,
+          ...(await readDirectory(own, ids)),
+          error: null,
+        };
+      } catch (error) {
+        next = {
+          serverId: props.host.id,
+          label: props.host.label,
+          workspaces: [],
+          agents: [],
+          complete: false,
+          error: error instanceof Error ? error.message : "Kitchen agents unavailable",
+        };
+      } finally {
+        pending = false;
+      }
+      if (!disposed) {
+        setInventories([next]);
+        setLoading(false);
+      }
+    }
+    const release = own.agents.subscribe((event) => {
+      if (event.kind === "remove" ? ids.includes(event.agentId) : ids.includes(event.agent.id))
+        changed();
+    });
+    const timer = ids.length ? setInterval(changed, 4000) : undefined;
     void refresh();
     return () => {
       disposed = true;
-      clearTimeout(debounce);
-      clearInterval(backstop);
-      unsubscribe.forEach((release) => release());
-      void Promise.all(releases.map((release) => release().catch(() => undefined)));
+      clearInterval(timer);
+      release();
     };
-  }, [own, hosts, props.host.id, props.host.label]);
+  }, [own, membership, ready, props.host.id, props.host.label]);
   return { inventories, loading };
 }
 
@@ -189,10 +147,11 @@ export function projectInventory(
   inventory: HostInventory,
   preferences: Preferences,
 ): LeitstandSession[] {
-  const grouped = groupRootAgentsByWorkspace(inventory.agents.map(projectionAgent));
+  const grouped = groupRootAgentsByWorkspace(inventory.agents.map(projectionAgent), true);
   return inventory.workspaces
     .filter((workspace) => !workspace.archivingAt)
     .map((workspace) => {
+      const members = grouped.get(workspace.id) ?? [];
       const key = `${inventory.serverId}:${workspace.id}`;
       const metadata = metadataSchema.parse(workspace);
       const githubRuntime = workspace.githubRuntime as WorkspaceDescriptor["githubRuntime"];
@@ -208,7 +167,10 @@ export function projectInventory(
           projectRootPath: workspace.projectRootPath,
           name: workspace.name,
           currentBranch: workspace.gitRuntime?.currentBranch ?? null,
-          statusBucket: workspace.status,
+          statusBucket:
+            STATUS_BUCKET_ORDER.find((bucket) =>
+              members.some((agent) => agent.bucket === bucket),
+            ) ?? "done",
           statusEnteredAt: workspace.statusEnteredAt ? new Date(workspace.statusEnteredAt) : null,
           prHint:
             current?.number && (state === "open" || state === "merged" || state === "closed")
@@ -222,7 +184,7 @@ export function projectInventory(
           relatedPullRequests: githubRuntime?.relatedPullRequests ?? [],
         },
         githubRuntime,
-        agents: grouped.get(workspace.id) ?? [],
+        agents: members,
         doneAt: Object.hasOwn(preferences.doneAt, key) ? preferences.doneAt[key] : metadata.doneAt,
         handoff: metadata.handoff as WorkspaceDescriptor["handoff"],
         topic: metadata.topic,

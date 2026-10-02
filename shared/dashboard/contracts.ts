@@ -35,7 +35,7 @@ export const scheduleTargetSchema = z.discriminatedUnion("kind", [
 
 export const dashboardSnapshot = defineRpc({
   name: "dashboard.snapshot",
-  input: z.object({}),
+  input: z.object({ kitchenOnly: z.boolean().optional() }),
   output: z.object({
     preferences: preferencesSchema,
     schedules: z.array(z.object({ target: scheduleTargetSchema, schedule: ScheduleSummarySchema })),

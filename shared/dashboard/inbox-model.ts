@@ -320,8 +320,11 @@ export function buildLeitstandInbox(input: {
   schedules: readonly LeitstandSchedule[];
   snoozedUntil: Readonly<Record<string, number>>;
   nowMs: number;
+  kitchenOnly?: boolean;
 }): LeitstandInbox {
-  const all: InboxItem[] = input.sessions.flatMap((session) => sessionItems(session, input.nowMs));
+  const all: InboxItem[] = input.sessions
+    .flatMap((session) => sessionItems(session, input.nowMs))
+    .filter((item) => !input.kitchenOnly || !["finished", "merge_ready"].includes(item.kind));
   for (const schedule of input.schedules) {
     const item = scheduleItem(schedule);
     if (item) all.push(item);

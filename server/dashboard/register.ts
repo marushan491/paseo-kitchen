@@ -32,15 +32,18 @@ export function registerDashboard(server: PluginServerContext) {
     return new PreferenceStore(directory);
   }
   let writes: Promise<unknown> = Promise.resolve();
-  server.handle(dashboardSnapshot, async () => {
+  server.handle(dashboardSnapshot, async (input) => {
     const values = await configured();
-    const scheduleTargets: ({ kind: "local" } | { kind: "remote"; serverId: string })[] = [
-      { kind: "local" },
-      ...[...new Set(values.scheduleHosts.map((host) => host.serverId))].map((serverId) => ({
-        kind: "remote" as const,
-        serverId,
-      })),
-    ];
+    const scheduleTargets: ({ kind: "local" } | { kind: "remote"; serverId: string })[] =
+      input.kitchenOnly
+        ? []
+        : [
+            { kind: "local" },
+            ...[...new Set(values.scheduleHosts.map((host) => host.serverId))].map((serverId) => ({
+              kind: "remote" as const,
+              serverId,
+            })),
+          ];
     const scheduleErrors: { target: (typeof scheduleTargets)[number]; message: string }[] = [];
     const results = await Promise.all(
       scheduleTargets.map(async (target) => {

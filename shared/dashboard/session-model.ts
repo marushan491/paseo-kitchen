@@ -128,16 +128,21 @@ function toLeitstandAgent(agent: Agent): LeitstandAgent {
   };
 }
 
-export function groupRootAgentsByWorkspace(agents: Iterable<Agent>): Map<string, LeitstandAgent[]> {
+export function groupRootAgentsByWorkspace(
+  agents: Iterable<Agent>,
+  includeChildren = false,
+): Map<string, LeitstandAgent[]> {
   const byId = new Map<string, Agent>();
   for (const agent of agents) byId.set(agent.id, agent);
   const grouped = new Map<string, LeitstandAgent[]>();
   for (const agent of byId.values()) {
     if (agent.archivedAt || !agent.workspaceId) continue;
     const parent = agent.parentAgentId ? byId.get(agent.parentAgentId) : undefined;
-    if (!isWorkspaceRootAgent(agent, parent)) continue;
+    if (!includeChildren && !isWorkspaceRootAgent(agent, parent)) continue;
     const list = grouped.get(agent.workspaceId) ?? [];
-    list.push(toLeitstandAgent(agent));
+    const projected = toLeitstandAgent(agent);
+    if (includeChildren) projected.personFacing = true;
+    list.push(projected);
     grouped.set(agent.workspaceId, list);
   }
   return grouped;

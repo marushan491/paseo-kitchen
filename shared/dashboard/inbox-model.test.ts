@@ -467,3 +467,29 @@ it("keeps actionable handoffs separate from confirmed errors without dropping or
     items.length,
   );
 });
+
+it("Kitchen suppresses automatic Cook handbacks while retaining actual permissions and blocked providers", () => {
+  const done = session({ bucket: "attention", agents: [agent({ bucket: "attention" })] });
+  const permission = session({
+    key: "srv:permission",
+    bucket: "needs_input",
+    agents: [
+      agent({
+        bucket: "needs_input",
+        pendingPermission: { id: "approval", title: "Allow command" },
+      }),
+    ],
+  });
+  const result = buildLeitstandInbox({
+    sessions: [done, permission],
+    schedules: [],
+    snoozedUntil: {},
+    nowMs: NOW,
+    kitchenOnly: true,
+  });
+  expect(result.items.map((item) => item.kind)).toEqual(["permission"]);
+  expect(
+    buildLeitstandInbox({ sessions: [done], schedules: [], snoozedUntil: {}, nowMs: NOW }).items[0]
+      ?.kind,
+  ).toBe("finished");
+});

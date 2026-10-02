@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { factoryList } from "../../shared/factory-contracts.js";
+import { kitchenAgentIds } from "../../shared/dashboard/kitchen-scope.js";
 import { kitchenCompletionByWorkspace } from "../../shared/dashboard/completion-model.js";
 import { useRpc, type PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { dashboardPreference, dashboardSnapshot } from "../../shared/dashboard/contracts.js";
@@ -50,12 +51,13 @@ export function useDashboard(props: PluginSurfaceProps) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(Date.now);
-  const directory = useDirectory(props);
+  const memberIds = useMemo(() => kitchenAgentIds(teams.data?.teams ?? []), [teams.data]);
+  const directory = useDirectory(props, memberIds, teams.isSuccess);
   const preferenceRevision = useRef(0);
   const refresh = useCallback(async () => {
     try {
       const revision = preferenceRevision.current;
-      const next = await read({});
+      const next = await read({ kitchenOnly: true });
       setSnapshot((current) => ({
         ...bindSnapshot(next, props.host.id),
         preferences:
@@ -76,7 +78,7 @@ export function useDashboard(props: PluginSurfaceProps) {
       pending = true;
       try {
         const revision = preferenceRevision.current;
-        const next = await read({});
+        const next = await read({ kitchenOnly: true });
         if (!disposed) {
           setSnapshot((current) => ({
             ...bindSnapshot(next, props.host.id),
@@ -114,25 +116,50 @@ export function useDashboard(props: PluginSurfaceProps) {
     [preferences, kitchenCompletions],
   );
   const sessions = useSessions(directory.inventories, effectivePreferences);
-  const schedules = useMemo(
+  const activeMemberIds = useMemo(
     () =>
-      (snapshot?.schedules ?? []).map(({ serverId, target, schedule }) =>
-        Object.assign(
-          {
-            key: `${serverId}:${schedule.id}`,
-            serverId,
-            target,
-            schedule,
-          },
-          resolveScheduleProject({ serverId, schedule }, sessions),
+      new Set(
+        kitchenAgentIds(
+          (teams.data?.teams ?? []).filter(
+            (state) => !["done", "canceled"].includes(state.team.status),
+          ),
         ),
       ),
-    [snapshot, sessions],
+    [teams.data],
+  );
+  const schedules = useMemo(
+    () =>
+      (snapshot?.schedules ?? [])
+        .filter(
+          ({ schedule }) =>
+            schedule.target.type === "agent" && memberIds.includes(schedule.target.agentId),
+        )
+        .map(({ serverId, target, schedule }) =>
+          Object.assign(
+            {
+              key: `${serverId}:${schedule.id}`,
+              serverId,
+              target,
+              schedule,
+            },
+            resolveScheduleProject({ serverId, schedule }, sessions),
+          ),
+        ),
+    [snapshot, sessions, memberIds],
   );
   const inbox = useMemo(
     () =>
-      buildLeitstandInbox({ sessions, schedules, snoozedUntil: preferences.snoozedUntil, nowMs }),
-    [sessions, schedules, preferences, nowMs],
+      buildLeitstandInbox({
+        sessions: sessions.map((session) => ({
+          ...session,
+          agents: session.agents.filter((agent) => activeMemberIds.has(agent.id)),
+        })),
+        schedules,
+        snoozedUntil: preferences.snoozedUntil,
+        nowMs,
+        kitchenOnly: true,
+      }),
+    [sessions, schedules, preferences, nowMs, activeMemberIds],
   );
   useEffect(() => {
     if (inbox.nextWakeAt === null) return;
@@ -170,7 +197,7 @@ export function useDashboard(props: PluginSurfaceProps) {
     schedules,
     inbox,
     snapshot,
-    error,
+    error: error ?? (teams.error ? String(teams.error) : null),
     refresh,
     snooze,
     markDone,

@@ -469,3 +469,36 @@ it.each(["waiting", "exhausted"] as const)(
     expect(original[0].bucket).toBe("running");
   },
 );
+
+it("Kitchen includes bound child permissions that the ordinary workspace overview leaves to their parent", () => {
+  const input = [
+    makeAgent({ id: "lead" }),
+    makeAgent({
+      id: "cook",
+      parentAgentId: "lead",
+      labels: { "paseo.origin": "agent" },
+      pendingPermissions: [
+        {
+          id: "allow",
+          provider: "claude",
+          name: "Bash",
+          kind: "tool",
+          title: "Allow verification",
+        },
+      ],
+    }),
+  ];
+  expect(
+    groupRootAgentsByWorkspace(input)
+      .get("ws-1")
+      ?.map((agent) => agent.id),
+  ).toEqual(["lead"]);
+  const cooked = groupRootAgentsByWorkspace(input, true)
+    .get("ws-1")
+    ?.find((agent) => agent.id === "cook");
+  expect(cooked).toMatchObject({
+    personFacing: true,
+    bucket: "needs_input",
+    pendingPermission: { id: "allow" },
+  });
+});
