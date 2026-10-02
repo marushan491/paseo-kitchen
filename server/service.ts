@@ -78,9 +78,6 @@ const MAX_ERROR_RETRIES = 4;
 const KITCHEN_REQUEST_LABEL = "agent-factory.kitchen.request";
 const LIMITS = {
   maxActiveCooks: 4,
-  roleActiveMs: 60 * 60_000,
-  totalActiveMs: 4 * 60 * 60_000,
-  observedTokens: 500_000,
 };
 
 export type { StartKitchenInput } from "./types.js";
@@ -202,15 +199,11 @@ export class TeamService {
 
   private policyPack(team: Team): WorkflowPack {
     const pack = this.pack(team);
-    return team.policy?.maxDelegationDepth !== undefined
-      ? {
-          ...pack,
-          maxDelegationDepth: Math.min(
-            pack.maxDelegationDepth ?? 0,
-            team.policy.maxDelegationDepth,
-          ),
-        }
-      : pack;
+    return {
+      ...pack,
+      maxDelegationDepth: selectedLimit(pack.maxDelegationDepth, team.policy?.maxDelegationDepth),
+      maxDelegatedItems: selectedLimit(pack.maxDelegatedItems, team.policy?.maxDelegatedItems),
+    };
   }
 
   private async recoverTeam(teamId: string): Promise<void> {
@@ -258,6 +251,9 @@ export class TeamService {
 
     await this.store.commit(teamId, async (draft) => {
       const events: TeamEventDraft[] = [];
+      const legacyReason = clearLegacyRuntimeLimit(draft.team);
+      if (legacyReason)
+        events.push({ type: "safety.limit-migrated", actor: RUNTIME, text: legacyReason });
       for (const decision of Object.values(draft.decisions)) {
         if (decision.status === "leased") {
           decision.status = "retry";
@@ -436,7 +432,7 @@ export class TeamService {
       bossAgentId: params.bossAgentId,
       roleProfiles,
     });
-    state.team.runtime = runtimeState();
+    state.team.runtime = runtimeState(params.policy);
     state.team.policy = params.policy;
     if (params.kitchen) state.team.kitchen = params.kitchen;
     if (params.acceptanceCriteria)
@@ -468,6 +464,9 @@ export class TeamService {
         0,
         ...Object.values(state.items).map((item) => Number(item.pack.delegationDepth ?? 0)),
       ),
+      delegatedItems: Object.values(state.items).filter(
+        (item) => typeof item.pack.workRequest === "string",
+      ).length,
       usage: await this.options.policyUsage?.(state),
       chainSteps: Object.values(state.decisions)
         .filter((decision) =>
@@ -655,6 +654,7 @@ export class TeamService {
       assertPolicyAllows(params.policy, {
         startedAgents: 0,
         delegationDepth: 0,
+        delegatedItems: 0,
         activeMs: 0,
         roleActiveMs: {},
         chainSteps: 0,
@@ -705,7 +705,8 @@ export class TeamService {
         idempotencyKey: params.idempotencyKey,
         requestFingerprint: fingerprint,
         mode: "accompanied",
-        workflowMode: params.workflowMode ?? "fixed",
+        workflowMode: kitchenWorkflowMode(params),
+        missionMode: kitchenMissionMode(params),
         executionMode: pack.id === "kitchen-single" ? "single" : "team",
         classification,
         spec: params.spec,
@@ -979,7 +980,7 @@ export class TeamService {
   ): Promise<TeamState> {
     await this.store.commit(teamId, async (draft) => {
       assertMutableTeam(draft.team);
-      const runtime = (draft.team.runtime ??= runtimeState());
+      const runtime = (draft.team.runtime ??= runtimeState(draft.team.policy));
       if (action === "accept")
         return { events: await this.acceptKitchen(draft, actorId, approval), result: null };
       if (draft.team.status === "canceled" || draft.team.status === "done") {
@@ -2259,6 +2260,7 @@ export class TeamService {
     ];
     if (state.team.kitchen?.spec)
       lines.push("", "## Mission specification", state.team.kitchen.spec);
+    appendMissionGoal(state.team, lines);
     this.appendRoleWorkflow(state, item, role.id, lines);
     if (item.board === "item") lines.push("", "## This work item", item.objective);
     if (item.acceptanceCriteria.length) {
@@ -2293,7 +2295,19 @@ export class TeamService {
       );
     }
     await this.appendKitchenContext(state, pack, item, role, lines);
-    if (role.skills.length) lines.push("", `## Skills to use`, role.skills.join(", "));
+    const skills = [
+      ...new Set([
+        ...role.skills,
+        ...(this.executedRoleProfile(state, item, role.id)?.skills ?? []),
+      ]),
+    ];
+    if (skills.length)
+      lines.push(
+        "",
+        "## Skills to use",
+        skills.join(", "),
+        "Resolve these names through your harness's installed skills and read their instructions before applying them. If a required skill is missing, report the concrete missing skill as a human need; do not invent a tool or claim the skill ran.",
+      );
     if (role.evidence && item.board === "item") {
       const file = await this.writeEvidence(state, item);
       lines.push(
@@ -2364,7 +2378,7 @@ export class TeamService {
       lines.push(
         "",
         "## Additional work",
-        'Use optional workRequests array beside report. Each request has requestId (stable nonempty string), title, objective, acceptanceCriteria (nonempty string array), optional parentId and dependsOn/conflictsWith item IDs. Report needs:{kind:"split",text:"why"} or needs:{kind:"research",text:"why"} and wait for verified children. Maximum depth two, ten delegated items per run.',
+        'Use optional workRequests array beside report. Each request has requestId (stable nonempty string), title, objective, acceptanceCriteria (nonempty string array), optional parentId and dependsOn/conflictsWith item IDs. Report needs:{kind:"split",text:"why"} or needs:{kind:"research",text:"why"} and wait for verified children. Reuse each request identity on retry; include only work needed for this item and the declared team goal. The runtime dispatches verified dependencies automatically and enforces explicitly selected delegation limits.',
       );
   }
 
@@ -2454,7 +2468,8 @@ export class TeamService {
     const limit = await this.store.commit(teamId, (draft) => {
       if (draft.team.status === "done" || draft.team.status === "canceled")
         return { events: [], result: false };
-      const runtime = (draft.team.runtime ??= runtimeState());
+      const runtime = (draft.team.runtime ??= runtimeState(draft.team.policy));
+      runtime.limits = runtimeState(draft.team.policy).limits;
       for (const binding of Object.values(draft.bindings))
         chargeBinding(draft, binding, this.now().getTime(), true);
       runtime.usage.tokensAvailable = agents.length > 0 && observed.length === agents.length;
@@ -2674,9 +2689,14 @@ export async function readProjectProfile(
   return ProjectProfileSchema.parse(JSON.parse(text));
 }
 
-function runtimeState(): NonNullable<Team["runtime"]> {
+function runtimeState(policy?: Team["policy"]): NonNullable<Team["runtime"]> {
   return {
-    limits: { ...LIMITS },
+    limits: {
+      ...LIMITS,
+      roleActiveMs: policy?.roleActiveMs,
+      totalActiveMs: policy?.totalActiveMs,
+      observedTokens: policy?.maxTokens,
+    },
     usage: { activeMs: 0, roleActiveMs: {}, tokensAvailable: false },
   };
 }
@@ -2684,7 +2704,7 @@ function runtimeState(): NonNullable<Team["runtime"]> {
 function chargeBinding(state: TeamState, binding: Binding, now: number, continuing = false): void {
   if (!binding.activeStartedAt) return;
   const elapsed = Math.max(0, now - Date.parse(binding.activeStartedAt));
-  const runtime = (state.team.runtime ??= runtimeState());
+  const runtime = (state.team.runtime ??= runtimeState(state.team.policy));
   binding.activeMs = (binding.activeMs ?? 0) + elapsed;
   runtime.usage.activeMs += elapsed;
   runtime.usage.roleActiveMs[binding.role] =
@@ -2706,6 +2726,7 @@ function requestFingerprint(input: StartKitchenInput): string {
         packId: input.packId,
         acceptanceCriteria: input.acceptanceCriteria,
         workflowMode: input.workflowMode ?? "fixed",
+        missionMode: input.missionMode,
         scheduleId: input.scheduleId,
         kind: input.kind ?? "feature",
         sourceAgentId: input.sourceAgentId,
@@ -2721,6 +2742,12 @@ function requestFingerprint(input: StartKitchenInput): string {
 }
 
 function validateKitchenInput(params: StartKitchenInput): void {
+  if (
+    params.missionMode &&
+    params.workflowMode &&
+    params.workflowMode !== (params.missionMode === "goal-driven" ? "self-organizing" : "fixed")
+  )
+    throw new Error("Mission mode and workflow mode must agree");
   for (const [field, value] of Object.entries({
     title: params.title,
     objective: params.objective,
@@ -2762,18 +2789,52 @@ function acceptanceCandidate(state: TeamState): { root: WorkItem; commit: string
   return { root, commit };
 }
 
+function appendMissionGoal(team: Team, lines: string[]): void {
+  if (team.kitchen?.missionMode === "goal-driven")
+    lines.push(
+      "",
+      "## Goal-driven mission",
+      "Keep working toward the declared team goal and every acceptance criterion. Plan the next dependent features without waiting for a separate kickoff. Discover and request missing implementation or research within this goal through stable workRequests when your role permits it; never invent unrelated scope or create a second team. A finished work item is not a finished mission. Existing dependency scheduling continues automatically through review, independent verification and combined integration. Stop only when the verified goal is ready for operator acceptance, an explicit limit is reached, the operator stops the mission, or a genuine human decision is needed.",
+      'For a genuine scope, product, permission or missing-information decision, report needs:{kind:"human",text:"the precise question and options"}. This persists the question and blocks that item; the operator answer resumes it. Never guess an answer, approve your own result, publish, merge or deploy.',
+    );
+}
+
+function clearLegacyRuntimeLimit(team: Team): string | undefined {
+  const reason = team.runtime?.limitReason;
+  if (!reason) return undefined;
+  const removed =
+    (/^.+ reached 60 minutes active time$/.test(reason) &&
+      team.policy?.roleActiveMs === undefined) ||
+    (reason === "Team reached four hours aggregate active time" &&
+      team.policy?.totalActiveMs === undefined) ||
+    (reason === "Team reached 500,000 observed tokens" && team.policy?.maxTokens === undefined);
+  if (!removed) return undefined;
+  team.runtime!.limitReason = undefined;
+  team.runtime!.limits = runtimeState(team.policy).limits;
+  if (team.pausedReason === reason)
+    team.pausedReason = "Previous default budget removed; resume to continue";
+  return `Removed previous automatic limit: ${reason}`;
+}
+
 function runtimeLimitReason(state: TeamState): string | undefined {
-  const runtime = state.team.runtime!;
-  if (runtime.limitReason) return runtime.limitReason;
-  const exhausted = Object.values(state.bindings).find(
-    (binding) => (binding.activeMs ?? 0) >= runtime.limits.roleActiveMs,
+  return state.team.runtime?.limitReason;
+}
+
+function selectedLimit(pack: number | undefined, policy: number | undefined): number | undefined {
+  if (pack === undefined) return policy;
+  if (policy === undefined) return pack;
+  return Math.min(pack, policy);
+}
+
+function kitchenMissionMode(input: StartKitchenInput): "goal-driven" | "planned" {
+  return input.missionMode ?? (input.workflowMode === "fixed" ? "planned" : "goal-driven");
+}
+
+function kitchenWorkflowMode(input: StartKitchenInput): "fixed" | "self-organizing" {
+  return (
+    input.workflowMode ??
+    (kitchenMissionMode(input) === "goal-driven" ? "self-organizing" : "fixed")
   );
-  if (exhausted) return `${exhausted.role} reached 60 minutes active time`;
-  if (runtime.usage.activeMs >= runtime.limits.totalActiveMs)
-    return "Team reached four hours aggregate active time";
-  if ((runtime.usage.observedTokens ?? 0) >= runtime.limits.observedTokens)
-    return "Team reached 500,000 observed tokens";
-  return undefined;
 }
 
 function appendVerifiedChildren(state: TeamState, item: WorkItem, lines: string[]): void {

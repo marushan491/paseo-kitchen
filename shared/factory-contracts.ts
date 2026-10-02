@@ -42,6 +42,7 @@ export const RoleProfileOverrideSchema = z.object({
   mode: z.string().min(1).optional(),
   workflowProfileId: z.string().min(1).optional(),
   instructions: z.string().optional(),
+  skills: z.array(z.string().min(1)).optional(),
   steps: z.array(WorkflowStepSchema).optional(),
 });
 export const RoleProfileSchema = RoleProfileOverrideSchema.extend({ provider: z.string().min(1) });
@@ -54,6 +55,7 @@ export const FactoryPolicySchema = z.object({
   maxChainSteps: z.number().int().positive().optional(),
   requireOutcomeJudge: z.boolean().optional(),
   maxDelegationDepth: z.number().int().nonnegative().optional(),
+  maxDelegatedItems: z.number().int().nonnegative().optional(),
   roleActiveMs: z.number().int().positive().optional(),
   totalActiveMs: z.number().int().positive().optional(),
 });
@@ -170,9 +172,9 @@ export type DecisionKind = z.infer<typeof DecisionKindSchema>;
 export const TeamRuntimeSchema = z.object({
   limits: z.object({
     maxActiveCooks: z.number().int().positive(),
-    roleActiveMs: z.number().positive(),
-    totalActiveMs: z.number().positive(),
-    observedTokens: z.number().int().positive(),
+    roleActiveMs: z.number().positive().optional(),
+    totalActiveMs: z.number().positive().optional(),
+    observedTokens: z.number().int().positive().optional(),
   }),
   usage: z.object({
     activeMs: z.number().nonnegative(),
@@ -207,6 +209,7 @@ export const TeamSchema = z.object({
       requestFingerprint: z.string(),
       mode: z.literal("accompanied"),
       workflowMode: z.enum(["fixed", "self-organizing"]).optional(),
+      missionMode: z.enum(["goal-driven", "planned"]).optional(),
       executionMode: z.enum(["single", "team"]).optional(),
       classification: z
         .object({
@@ -399,6 +402,7 @@ export const StartKitchenSchema = z.object({
   idempotencyKey: z.string().min(1),
   roleProfiles: z.record(z.string(), RoleProfileOverrideSchema).optional(),
   workflowMode: z.enum(["fixed", "self-organizing"]).optional(),
+  missionMode: z.enum(["goal-driven", "planned"]).optional(),
   executionMode: z.enum(["auto", "single", "team"]).optional(),
   spec: z.string().optional(),
   publication: PublicationSchema.optional(),

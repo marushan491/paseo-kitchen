@@ -130,6 +130,7 @@ describe("TeamService", () => {
           thinking: "high",
           mode: "read-only",
           instructions: "Keep tasks bounded",
+          skills: ["paseo-plugin"],
           steps: [
             { id: "inspect", title: "Inspect", instructions: "Inspect the public contract" },
             { id: "plan", title: "Plan", instructions: "Write a dependency plan" },
@@ -153,6 +154,8 @@ describe("TeamService", () => {
     });
     const prompt = host.prompts.find((entry) => entry.agentId === po.id)!.prompt;
     expect(prompt).toContain("Keep tasks bounded");
+    expect(prompt).toContain("paseo-plugin");
+    expect(prompt).toContain("harness's installed skills");
     expect(prompt.indexOf("1. Inspect [inspect]")).toBeLessThan(prompt.indexOf("2. Plan [plan]"));
     const configured = await svc.configureWork(
       started.team.id,
@@ -1568,7 +1571,7 @@ describe("Kitchen runtime", () => {
     );
   });
 
-  it("persists active time, excludes paused queue time and stops a role at 60 minutes", async () => {
+  it("persists active time, excludes paused queue time and stops at an explicit role budget", async () => {
     const host = kitchenFakeHost();
     const initial = Date.now() - 60_000;
     let now = new Date(initial);
@@ -1581,6 +1584,7 @@ describe("Kitchen runtime", () => {
       bossAgentId: "boss",
       title: "Budget",
       objective: "Plan",
+      policy: { roleActiveMs: 60 * 60_000 },
     });
     await service.controlKitchen(team.team.id, "pause", "operator");
     await service.dispatchAll();
@@ -1594,7 +1598,7 @@ describe("Kitchen runtime", () => {
     const state = (await service.status(team.team.id)).state;
     expect(state.team.runtime?.usage.activeMs).toBe(60 * 60_000);
     expect(state.team.status).toBe("paused");
-    expect(state.team.runtime?.limitReason).toContain("60 minutes");
+    expect(state.team.runtime?.limitReason).toContain("roleActiveMs");
     expect(host.interrupted).toContain(host.created[0]!.id);
     const persisted = (await makeKitchenService(root, host).status(team.team.id)).state;
     expect(persisted.team.runtime).toEqual(state.team.runtime);
@@ -1869,6 +1873,171 @@ describe("Kitchen runtime", () => {
     ).toHaveLength(1);
   });
 
+  it("persists goal-driven nested next-work dispatch and resumes an actual human question after reload", async () => {
+    const host = kitchenFakeHost();
+    let service = makeKitchenService(root, host);
+    const input = {
+      title: "Goal-driven",
+      objective: "Deliver the scoped feature and its dependencies",
+      cwd: root,
+      provider: "codex",
+      idempotencyKey: "goal-driven",
+      acceptanceCriteria: [{ id: "goal", text: "Scoped feature is verified" }],
+    };
+    const team = await service.startKitchen(input);
+    expect(team.team.kitchen).toMatchObject({
+      missionMode: "goal-driven",
+      workflowMode: "self-organizing",
+    });
+    expect(team.team.runtime?.limits).toEqual({ maxActiveCooks: 4 });
+    await service.dispatchAll();
+    await service.report(
+      host.agentFor("po").id,
+      { outcome: "planned", summary: "Scoped backlog" },
+      [
+        {
+          key: "A",
+          title: "Feature",
+          objective: "Deliver scoped behavior",
+          acceptanceCriteria: ["Feature works"],
+        },
+        {
+          key: "B",
+          title: "Next feature",
+          objective: "Finish dependent behavior",
+          acceptanceCriteria: ["Dependent behavior works"],
+          dependsOn: ["A"],
+        },
+      ],
+    );
+    await service.dispatchAll();
+    let state = (await service.status(team.team.id)).state;
+    let item = itemByKey(state, "A");
+    for (let depth = 1; depth <= 3; depth++) {
+      const agent = host.created.find(
+        (record) =>
+          record.labels["agent-factory.team.item"] === item.id &&
+          record.labels[TEAM_ROLE_LABEL] === "developer",
+      )!;
+      expect(host.prompts.find((entry) => entry.agentId === agent.id)!.prompt).toContain(
+        "Goal-driven mission",
+      );
+      await service.report(
+        agent.id,
+        {
+          outcome: "done",
+          summary: "Missing scoped dependency discovered",
+          needs: { kind: "split", text: "Dependency required for the declared goal" },
+        },
+        undefined,
+        [
+          {
+            requestId: `needed-${depth}`,
+            title: `Dependency ${depth}`,
+            objective: "Implement required scoped dependency",
+            acceptanceCriteria: ["Dependency is verified"],
+          },
+        ],
+      );
+      await service.dispatchAll();
+      state = (await service.status(team.team.id)).state;
+      expect(state.items[item.id]!.phase).toBe("waiting-for-work");
+      item = Object.values(state.items).find((candidate) => candidate.parentId === item.id)!;
+      expect(item.pack.delegationDepth).toBe(depth);
+      expect(item.phase).toBe("implement");
+    }
+    const worker = host.created.find(
+      (record) =>
+        record.labels["agent-factory.team.item"] === item.id &&
+        record.labels[TEAM_ROLE_LABEL] === "developer",
+    )!;
+    await service.report(worker.id, {
+      outcome: "done",
+      summary: "Product decision required",
+      needs: { kind: "human", text: "Should the feature use red or blue?" },
+    });
+    const starts = host.created.length;
+    await service.shutdown();
+    service = makeKitchenService(root, host);
+    await service.start();
+    state = (await service.status(team.team.id)).state;
+    expect(state.team.kitchen?.missionMode).toBe("goal-driven");
+    expect(state.items[item.id]!.phase).toBe("blocked");
+    expect(
+      Object.values(state.decisions).some(
+        (decision) =>
+          decision.kind === "notify-human" && String(decision.payload.text).includes("red or blue"),
+      ),
+    ).toBe(true);
+    expect(host.created).toHaveLength(starts);
+    expect(itemByKey(state, "B").phase).toBe("ready");
+    await service.message(team.team.id, "Use blue.", { type: "human", id: "operator" });
+    await service.dispatchAll();
+    state = (await service.status(team.team.id)).state;
+    expect(state.items[item.id]!.phase).toBe("implement");
+    expect(host.prompts.at(-1)?.prompt).toContain("Use blue.");
+    expect((await service.startKitchen(input)).team.id).toBe(team.team.id);
+    expect(
+      Object.values(state.items).filter((candidate) => candidate.pack.workRequest),
+    ).toHaveLength(3);
+  });
+
+  it("keeps planned missions fixed and rejects an explicitly zero delegated-item budget", async () => {
+    const host = kitchenFakeHost();
+    const service = makeKitchenService(root, host);
+    const input = {
+      title: "Explicit mode",
+      objective: "Deliver behavior",
+      cwd: root,
+      provider: "codex",
+      acceptanceCriteria: [{ id: "goal", text: "Works" }],
+    };
+    const planned = await service.startKitchen({
+      ...input,
+      idempotencyKey: "planned",
+      missionMode: "planned",
+    });
+    expect(planned.team.kitchen).toMatchObject({ missionMode: "planned", workflowMode: "fixed" });
+    const limited = await service.startKitchen({
+      ...input,
+      idempotencyKey: "limited-requests",
+      title: "Explicit delegation limit",
+      objective: "Deliver limited behavior",
+      policy: { maxDelegatedItems: 0 },
+    });
+    await service.dispatchAll();
+    const po = host.created.find(
+      (record) =>
+        record.labels["agent-factory.team"] === limited.team.id &&
+        record.labels[TEAM_ROLE_LABEL] === "po",
+    )!;
+    await service.report(po.id, { outcome: "planned", summary: "Plan" }, [
+      { key: "A", title: "Feature", objective: "Feature", acceptanceCriteria: ["Feature works"] },
+    ]);
+    await service.dispatchAll();
+    const state = (await service.status(limited.team.id)).state;
+    const developer = host.agentFor("developer", "A", state);
+    await expect(
+      service.report(developer.id, { outcome: "done", summary: "Extra work" }, undefined, [
+        {
+          requestId: "extra",
+          title: "Extra",
+          objective: "Extra",
+          acceptanceCriteria: ["Extra works"],
+        },
+      ]),
+    ).rejects.toThrow("item limit");
+    expect(Object.values((await service.status(limited.team.id)).state.items)).toHaveLength(2);
+    await expect(
+      service.startKitchen({
+        ...input,
+        idempotencyKey: "mismatch",
+        missionMode: "goal-driven",
+        workflowMode: "fixed",
+      }),
+    ).rejects.toThrow("must agree");
+  });
+
   it("commits delegated work with its report atomically and rejects requests in fixed mode", async () => {
     const host = kitchenFakeHost();
     const service = makeKitchenService(root, host);
@@ -1990,6 +2159,38 @@ describe("Kitchen runtime", () => {
     }
   });
 
+  it("keeps legacy budget pauses paused after reload and allows explicit resume", async () => {
+    const host = kitchenFakeHost();
+    const service = makeKitchenService(root, host);
+    const team = await service.startKitchen({
+      title: "Old default budget",
+      objective: "Resume a user-controlled mission",
+      cwd: root,
+      provider: "codex",
+      idempotencyKey: "legacy-budget",
+      acceptanceCriteria: [{ id: "goal", text: "Verified" }],
+    });
+    await service.store.commit(team.team.id, (draft) => {
+      draft.team.status = "paused";
+      draft.team.pausedReason = "Team reached four hours aggregate active time";
+      draft.team.runtime!.limitReason = draft.team.pausedReason;
+      draft.team.runtime!.limits.totalActiveMs = 4 * 60 * 60_000;
+      draft.team.kitchen!.stopped = true;
+      return { events: [], result: null };
+    });
+    await service.shutdown();
+    const reloaded = makeKitchenService(root, host);
+    await reloaded.start();
+    let state = (await reloaded.status(team.team.id)).state;
+    expect(state.team.status).toBe("paused");
+    expect(state.team.runtime!.limitReason).toBeUndefined();
+    expect(state.team.runtime!.limits.totalActiveMs).toBeUndefined();
+    await reloaded.controlKitchen(team.team.id, "resume", "operator");
+    state = (await reloaded.status(team.team.id)).state;
+    expect(state.team.status).toBe("active");
+    await reloaded.shutdown();
+  });
+
   it("keeps completed and canceled teams unchanged when late usage exceeds a runtime limit", async () => {
     const host = kitchenFakeHost();
     const service = makeKitchenService(root, host);
@@ -2014,13 +2215,14 @@ describe("Kitchen runtime", () => {
     }
   });
 
-  it("stops at persisted aggregate and observed token limits without inventing missing usage", async () => {
+  it("enforces explicit aggregate time while unbudgeted observed usage stays informational", async () => {
     const host = kitchenFakeHost();
     const service = makeKitchenService(root, host);
     const team = await service.startTeam({
       bossAgentId: "boss",
       title: "Aggregate",
       objective: "Plan",
+      policy: { totalActiveMs: 4 * 60 * 60_000 },
     });
     await service.dispatchAll();
     await service.store.commit(team.team.id, (draft) => {
@@ -2029,7 +2231,7 @@ describe("Kitchen runtime", () => {
     });
     await service.healthAll();
     expect((await service.status(team.team.id)).state.team.runtime?.limitReason).toContain(
-      "four hours",
+      "totalActiveMs",
     );
     const another = await service.startTeam({
       bossAgentId: "boss",
@@ -2044,11 +2246,18 @@ describe("Kitchen runtime", () => {
       (agent) => agent.labels["agent-factory.team"] === another.team.id,
     )!;
     cook.usageTotals = { inputTokens: 450_000, outputTokens: 50_000 };
+    await service.store.commit(another.team.id, (draft) => {
+      draft.team.runtime!.usage.activeMs = 5 * 60 * 60_000;
+      draft.team.runtime!.usage.roleActiveMs.developer = 90 * 60_000;
+      return { events: [], result: null };
+    });
     await service.healthAll();
     state = (await service.status(another.team.id)).state;
     expect(state.team.runtime?.usage.tokensAvailable).toBe(true);
     expect(state.team.runtime?.usage.observedTokens).toBe(500_000);
-    expect(state.team.runtime?.limitReason).toContain("observed tokens");
+    expect(state.team.runtime?.limitReason).toBeUndefined();
+    expect(state.team.runtime?.limits.observedTokens).toBeUndefined();
+    expect(state.team.status).toBe("active");
   });
 });
 

@@ -67,6 +67,14 @@ describe("Configured Kitchen policy", () => {
     expect(evaluatePolicy({ requireOutcomeJudge: false }, {})).toEqual([]);
   });
 
+  it("applies delegated-item limits only when selected and permits the exact count", () => {
+    expect(evaluatePolicy({}, { delegatedItems: 100 })).toEqual([]);
+    expect(evaluatePolicy({ maxDelegatedItems: 0 }, { delegatedItems: 0 })).toEqual([]);
+    expect(evaluatePolicy({ maxDelegatedItems: 2 }, { delegatedItems: 2 })).toEqual([]);
+    expect(evaluatePolicy({ maxDelegatedItems: 2 }, { delegatedItems: 3 })[0].code).toBe("limit");
+    expect(evaluatePolicy({ maxDelegatedItems: 2 }, {})[0].code).toBe("unavailable");
+  });
+
   it("requires actual passed judge evidence bound to the current candidate", () => {
     const candidate = "a".repeat(40);
     const receipt = {

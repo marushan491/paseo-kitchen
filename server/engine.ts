@@ -491,12 +491,12 @@ function validateDelegation(
 ): number {
   const ancestors = workAncestors(state, parent);
   const depth = ancestors.size;
-  if (depth > (pack.maxDelegationDepth ?? 0))
+  if (pack.maxDelegationDepth !== undefined && depth > pack.maxDelegationDepth)
     throw new ReportRejectedError("Delegation depth limit reached");
   const delegated = Object.values(state.items).filter(
     (item) => typeof item.pack.workRequest === "string",
   );
-  if (delegated.length >= (pack.maxDelegatedItems ?? 0))
+  if (pack.maxDelegatedItems !== undefined && delegated.length >= pack.maxDelegatedItems)
     throw new ReportRejectedError("Delegated work item limit reached");
   const refs = [...(input.dependsOn ?? []), ...(input.conflictsWith ?? [])];
   for (const ref of refs) {

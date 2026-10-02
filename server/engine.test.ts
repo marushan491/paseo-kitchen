@@ -97,6 +97,7 @@ describe("Kitchen workflow", () => {
     expect(new PackRegistry().list().map((pack) => pack.id)).toEqual([
       "software-basic",
       "kitchen",
+      "kitchen-single",
       "kitchen-insights",
       "kitchen-gardener",
     ]);
@@ -280,6 +281,7 @@ describe("Kitchen workflow", () => {
   });
 
   it("rejects third-level delegation, foreign parent claims, cyclic refs and more than ten requests", () => {
+    const limitedPack = { ...kitchenPack, maxDelegationDepth: 2, maxDelegatedItems: 10 };
     const { state, events, item, developer } = planned();
     const request = {
       requestId: "one",
@@ -288,36 +290,36 @@ describe("Kitchen workflow", () => {
       acceptanceCriteria: ["Works"],
     };
     expect(() =>
-      requestWork(state, kitchenPack, developer, { ...request, parentId: "other" }, events),
+      requestWork(state, limitedPack, developer, { ...request, parentId: "other" }, events),
     ).toThrow(/caller's item/);
     expect(() =>
-      requestWork(state, kitchenPack, developer, { ...request, dependsOn: [item.id] }, events),
+      requestWork(state, limitedPack, developer, { ...request, dependsOn: [item.id] }, events),
     ).toThrow(/reference/);
-    const child = requestWork(state, kitchenPack, developer, request, events);
-    applyReport(state, kitchenPack, developer, { outcome: "done", summary: "Waiting" }, events);
+    const child = requestWork(state, limitedPack, developer, request, events);
+    applyReport(state, limitedPack, developer, { outcome: "done", summary: "Waiting" }, events);
     const childDeveloper = seat(state, child, "developer");
     const grandchild = requestWork(
       state,
-      kitchenPack,
+      limitedPack,
       childDeveloper,
       { ...request, requestId: "two" },
       events,
     );
     applyReport(
       state,
-      kitchenPack,
+      limitedPack,
       childDeveloper,
       { outcome: "done", summary: "Waiting" },
       events,
     );
     expect(() =>
-      requestWork(state, kitchenPack, seat(state, grandchild, "developer"), request, events),
+      requestWork(state, limitedPack, seat(state, grandchild, "developer"), request, events),
     ).toThrow(/depth limit/);
     const fresh = planned();
     for (let index = 0; index < 10; index++)
       requestWork(
         fresh.state,
-        kitchenPack,
+        limitedPack,
         fresh.developer,
         { ...request, requestId: String(index) },
         fresh.events,
@@ -325,7 +327,7 @@ describe("Kitchen workflow", () => {
     expect(() =>
       requestWork(
         fresh.state,
-        kitchenPack,
+        limitedPack,
         fresh.developer,
         { ...request, requestId: "eleven" },
         fresh.events,

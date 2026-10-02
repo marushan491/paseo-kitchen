@@ -239,8 +239,6 @@ export const kitchenPack: WorkflowPack = validatePack({
   maxParallel: 4,
   dependencyPhase: "ready-for-human",
   requireVerification: true,
-  maxDelegationDepth: 2,
-  maxDelegatedItems: 10,
   roles: {
     po: {
       ...softwareBasicPack.roles.po!,

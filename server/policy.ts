@@ -11,6 +11,7 @@ export interface PolicyObservation {
   chainSteps?: number;
   outcomeJudgeAvailable?: boolean;
   delegationDepth?: number;
+  delegatedItems?: number;
   usage?: {
     scope: "team";
     cumulative: boolean;
@@ -56,6 +57,13 @@ export function evaluatePolicy(
     "maxDelegationDepth",
     observation.delegationDepth,
     policy.maxDelegationDepth,
+    violations,
+    true,
+  );
+  check(
+    "maxDelegatedItems",
+    observation.delegatedItems,
+    policy.maxDelegatedItems,
     violations,
     true,
   );
