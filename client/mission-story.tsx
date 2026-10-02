@@ -1,6 +1,6 @@
 import type { PaseoAgent } from "@getpaseo/client";
-import { type PluginSurfaceProps, usePaseo } from "@getpaseo/plugin/client";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import type { Binding, TeamEvent, TeamState } from "../shared/factory-contracts.js";
@@ -14,51 +14,6 @@ import { missionActivity } from "../shared/mission-story.js";
 import { kitchenHumanRequests } from "../shared/dashboard/kitchen-scope.js";
 import { Action, Disclosure, Field, useFactoryStyles } from "./ui.js";
 import { missionStageColor, missionStageLabels } from "./mission-summary.js";
-
-const noAgents: Readonly<Record<string, PaseoAgent>> = {};
-
-export function useMissionAgents(state?: TeamState) {
-  const paseo = usePaseo();
-  const ids = state
-    ? [
-        ...new Set([
-          state.team.bossAgentId,
-          ...Object.values(state.bindings)
-            .filter((binding) => binding.status === "active")
-            .map((binding) => binding.agentId),
-        ]),
-      ]
-        .filter(Boolean)
-        .sort()
-    : [];
-  const membership = JSON.stringify(ids);
-  const query = useQuery({
-    queryKey: ["factory", "mission-agents", state?.team.id, membership],
-    enabled: Boolean(state),
-    queryFn: async () => {
-      const selected: string[] = JSON.parse(membership);
-      const snapshots: PaseoAgent[] = [];
-      for (let offset = 0; offset < selected.length; offset += 8) {
-        const entries = await Promise.all(
-          selected.slice(offset, offset + 8).map(async (id) => {
-            try {
-              return (await paseo.agents.ref(id).refresh())?.agent;
-            } catch (error) {
-              if (error instanceof Error && error.message === `Agent not found: ${id}`)
-                return undefined;
-              throw error;
-            }
-          }),
-        );
-        snapshots.push(...entries.filter((entry): entry is PaseoAgent => Boolean(entry)));
-      }
-      return Object.fromEntries(snapshots.map((agent) => [agent.id, agent]));
-    },
-    refetchInterval: 4000,
-    refetchIntervalInBackground: false,
-  });
-  return { agents: query.data ?? noAgents, error: query.error };
-}
 
 export function MissionStory(
   props: PluginSurfaceProps & {

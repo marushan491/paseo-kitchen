@@ -13,6 +13,7 @@ import {
   missionStages,
   missionSummary,
   missionWorkflowFor,
+  missionAgentIds,
   stageTitle,
   type MissionAgents,
 } from "./mission-stage.js";
@@ -374,4 +375,28 @@ it("does not treat malformed or unconfirmed condition receipts as a skip", () =>
   expect(
     missionStages(state, workflow).find((stage) => stage.phase === "security-review")?.skippedCount,
   ).toBe(0);
+});
+
+it("observes only mission bosses and active bindings with stable deduplicated IDs", () => {
+  const { state } = fixture();
+  const item = child(state);
+  bind(state, item);
+  state.bindings.revoked = {
+    ...state.bindings.worker,
+    id: "revoked",
+    agentId: "unrelated-old-agent",
+    status: "revoked",
+  };
+  state.bindings.duplicate = { ...state.bindings.worker, id: "duplicate" };
+  state.team.kitchen = {
+    idempotencyKey: "mission",
+    mode: "accompanied",
+    sourceAgentId: "ordinary-source-chat",
+  };
+  expect(missionAgentIds([state])).toEqual(["agent", "boss"]);
+  expect(missionAgentIds([state, state])).toEqual(["agent", "boss"]);
+  state.team.status = "done";
+  expect(missionAgentIds([state])).toEqual([]);
+  state.team.status = "canceled";
+  expect(missionAgentIds([state])).toEqual([]);
 });

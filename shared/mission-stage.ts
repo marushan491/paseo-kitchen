@@ -20,6 +20,17 @@ export function missionWorkflowFor(
     (pack) => pack.id === state.team.packId && pack.version === state.team.packVersion,
   )?.workflow;
 }
+export function missionAgentIds(teams: readonly TeamState[]): string[] {
+  const ids = new Set<string>();
+  for (const state of teams) {
+    if (["done", "canceled"].includes(state.team.status)) continue;
+    ids.add(state.team.bossAgentId);
+    for (const binding of Object.values(state.bindings)) {
+      if (binding.status === "active") ids.add(binding.agentId);
+    }
+  }
+  return [...ids].filter(Boolean).sort();
+}
 export type MissionAgent = Pick<PaseoAgent, "id" | "status" | "pendingPermissions"> & {
   routingNotice?: unknown;
   lastError?: string | null;

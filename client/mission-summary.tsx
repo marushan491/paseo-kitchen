@@ -21,6 +21,7 @@ import {
   type MissionWorkflow,
 } from "../shared/mission-stage.js";
 import { Action } from "./ui.js";
+import { useMissionListAgents } from "./mission-agents.js";
 
 const noAgents: MissionAgents = {};
 const filters = [
@@ -238,6 +239,18 @@ export function MissionList(
   },
 ) {
   const styles = useSummaryStyles(props);
+  const visibleTeams = useMemo(
+    () =>
+      props.teams.filter(
+        (state) =>
+          !props.projectPath ||
+          state.team.cwd === props.projectPath ||
+          state.team.cwd.startsWith(props.projectPath + "/"),
+      ),
+    [props.teams, props.projectPath],
+  );
+  const live = useMissionListAgents(visibleTeams, props.host.id, props.agents === undefined);
+  const agents = props.agents ?? live.agents;
   const [filter, setFilter] = useState<MissionFilter | "scheduled">("active");
   const readSchedules = useRpc(factoryScheduleList);
   const schedules = useQuery({
@@ -252,8 +265,8 @@ export function MissionList(
       schedule.target.cwd === props.projectPath ||
       schedule.target.cwd.startsWith(props.projectPath + "/"),
   );
-  const summaries = props.teams.map((state) =>
-    missionSummary(state, missionWorkflowFor(state, props.packs), props.agents),
+  const summaries = visibleTeams.map((state) =>
+    missionSummary(state, missionWorkflowFor(state, props.packs), agents),
   );
   const rows = filter === "scheduled" ? [] : filterMissions(summaries, filter);
   const counts: Record<typeof filter, number> = {
@@ -277,6 +290,9 @@ export function MissionList(
           />
         ))}
       </View>
+      {live.error ? (
+        <Text style={styles.caption}>Agent activity unavailable: {String(live.error)}</Text>
+      ) : null}
       {filter === "scheduled" ? (
         <View style={styles.stack}>
           {schedules.isPending ? (
@@ -310,6 +326,7 @@ export function MissionList(
               key={summary.teamId}
               {...props}
               state={state}
+              agents={agents}
               selected={summary.teamId === props.selected}
               workflow={missionWorkflowFor(state, props.packs)}
             />

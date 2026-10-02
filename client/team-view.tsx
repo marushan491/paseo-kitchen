@@ -23,8 +23,9 @@ import {
   MissionEvidence,
   MissionActivityView,
   MissionReply,
-  useMissionAgents,
 } from "./mission-story.js";
+
+import { useMissionAgents } from "./mission-agents.js";
 
 const emptyRoles = {};
 const views = ["Stages", "Evidence", "Activity", "Team chat"] as const;
@@ -55,7 +56,7 @@ export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
     refetchInterval: 4000,
     refetchIntervalInBackground: false,
   });
-  const live = useMissionAgents(team.data?.state);
+  const live = useMissionAgents(team.data?.state, props.host.id);
   const change = useMutation({
     mutationFn: async (action: Control | { retry: string }) => {
       if (typeof action === "object")
