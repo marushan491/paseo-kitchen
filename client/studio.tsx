@@ -10,6 +10,7 @@ import { ScrollView, Text, View } from "react-native";
 import { factoryList, factoryPacks, type TeamState } from "../shared/factory-contracts.js";
 import { Action, useFactoryStyles } from "./ui.js";
 import { Choice } from "./choice.js";
+import { MissionList } from "./mission-summary.js";
 import { Factory } from "./factory.js";
 import { Improvements } from "./improvements.js";
 import { MigrationSettings } from "./migration.js";
@@ -22,6 +23,7 @@ import { WorkflowProfiles, WorkItemProfileSettings } from "./workflows.js";
 const sections = ["Overview", "Kitchen", "Missions", "Team", "Settings"] as const;
 const emptyTeams: TeamState[] = [];
 const emptyRoles = {};
+const emptyPacks = [] as const;
 const settingsTitles = {
   Kitchen: "Connection & capacity",
   Overview: "Dashboard",
@@ -125,15 +127,17 @@ export function Studio(
                 />
               </View>
             ) : null}
-            <Action
-              theme={props.theme}
-              title="Start mission"
-              accessibilityLabel="Start mission"
-              compact={props.layout.compact}
-              variant="primary"
-              value="new"
-              onAction={newMission}
-            />
+            {!createNew ? (
+              <Action
+                theme={props.theme}
+                title="Start mission"
+                accessibilityLabel="Start mission"
+                compact={props.layout.compact}
+                variant="primary"
+                value="new"
+                onAction={newMission}
+              />
+            ) : null}
           </View>
         </View>
         <ScrollView
@@ -189,6 +193,14 @@ export function Studio(
             onOpenTeam={openTeam}
             onConfigureAgent={setSelectedAgent}
             onNewMission={newMission}
+          />
+          <MissionList
+            {...props}
+            teams={visibleTeams}
+            packs={packs.data?.packs || emptyPacks}
+            projectPath={project}
+            onOpen={openTeam}
+            onNew={newMission}
           />
           {configured ? (
             <WorkItemProfileSettings

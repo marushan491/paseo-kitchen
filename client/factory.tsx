@@ -26,6 +26,7 @@ import { RoleAssignments } from "./workflows.js";
 import { Choice } from "./choice.js";
 import { PolicyFields, parsePolicyDraft, type PolicyDraft } from "./policy.js";
 import { PublicationFields, initialPublication, parsePublication } from "./publication.js";
+import { MissionList } from "./mission-summary.js";
 import { TeamView } from "./team-view.js";
 import { readKitchenSuggestion } from "../shared/kitchen-suggestion.js";
 
@@ -57,7 +58,7 @@ type Props = PluginSurfaceProps &
   };
 
 export function Factory(props: Props) {
-  const { theme, workspaceId, agentId, onCancel } = props;
+  const { workspaceId, agentId, onCancel } = props;
   const styles = useFactoryStyles(props);
   const paseo = usePaseo();
   const list = useRpc(factoryList);
@@ -141,6 +142,7 @@ export function Factory(props: Props) {
   const agents = useQuery({
     queryKey: ["factory", "agents", workspaceId],
     queryFn: () => listFactoryAgents(paseo.agents),
+    enabled: creating || Boolean(workspaceId),
   });
   const workspace = useQuery({
     queryKey: ["factory", "workspace", workspaceId],
@@ -225,6 +227,10 @@ export function Factory(props: Props) {
     setShowSchedules(false);
     setCreating(false);
   }, []);
+  const showList = useCallback(() => {
+    setSelected("");
+    setShowSchedules(false);
+  }, []);
   const startKitchen = useCallback(() => create.mutate(), [create]);
   const freshRequest = useCallback(() => {
     attempt.current = null;
@@ -252,23 +258,27 @@ export function Factory(props: Props) {
     setSource("");
     setCwd(path);
   }, []);
-  const visibleTeams = (teams.data?.teams || []).filter(
-    (state) =>
-      (!props.projectPath ||
-        state.team.cwd === props.projectPath ||
-        state.team.cwd.startsWith(props.projectPath + "/")) &&
-      (!workspaceId ||
-        state.team.id === selected ||
-        eligible.some(({ agent }) => agent.id === state.team.bossAgentId) ||
-        state.team.cwd === workspace.data?.workspaceDirectory ||
-        state.team.kitchen?.sourceAgentId === agentId),
+  const visibleTeams = useMemo(
+    () =>
+      (teams.data?.teams || []).filter(
+        (state) =>
+          (!props.projectPath ||
+            state.team.cwd === props.projectPath ||
+            state.team.cwd.startsWith(props.projectPath + "/")) &&
+          (!workspaceId ||
+            state.team.id === selected ||
+            eligible.some(({ agent }) => agent.id === state.team.bossAgentId) ||
+            state.team.cwd === workspace.data?.workspaceDirectory ||
+            state.team.kitchen?.sourceAgentId === agentId),
+      ),
+    [teams.data, props.projectPath, workspaceId, selected, eligible, workspace.data, agentId],
   );
   const chooseExecution = useCallback((value: string) => {
     setExecutionMode(value === "single" || value === "team" ? value : "auto");
     if (value === "single") setPackId("kitchen");
   }, []);
   const selectionVisible = visibleTeams.some((state) => state.team.id === selected);
-  const canShowContent = !creating;
+  const { showMissions, showDetail } = missionPanels(creating, selectionVisible, showSchedules);
   const error = [teams.error, agents.error, packs.error, workspace.error, create.error].find(
     Boolean,
   );
@@ -289,40 +299,20 @@ export function Factory(props: Props) {
           onRefresh={refresh}
           onSchedules={toggleSchedules}
           error={error}
+          hasSelection={selectionVisible}
+          onBack={showList}
         />
-        <View style={creating ? styles.stack : styles.columns}>
-          {canShowContent ? (
-            <View style={styles.sidebar}>
-              <Text style={styles.heading}>Kitchen runs</Text>
-              {teams.isPending ? <Text style={styles.muted}>Loading runs…</Text> : null}
-              {visibleTeams.map((state) => (
-                <Action
-                  key={state.team.id}
-                  theme={theme}
-                  title={`${state.team.title} · ${state.team.status}`}
-                  selected={selected === state.team.id}
-                  value={state.team.id}
-                  onAction={openRun}
-                />
-              ))}
-              {visibleTeams.length === 0 ? (
-                <View style={styles.card}>
-                  <Text style={styles.heading}>No missions here yet</Text>
-                  <Text style={styles.muted}>
-                    Start with an outcome. Kitchen will plan and assign the work.
-                  </Text>
-                  {props.onNew ? (
-                    <Action
-                      theme={theme}
-                      title="Start mission"
-                      variant="primary"
-                      value="new"
-                      onAction={props.onNew}
-                    />
-                  ) : null}
-                </View>
-              ) : null}
-            </View>
+        <View style={styles.stack}>
+          {showMissions ? (
+            <MissionList
+              {...props}
+              teams={visibleTeams}
+              packs={availablePacks}
+              selected={selected}
+              onOpen={openRun}
+              onNew={props.onNew}
+              onSchedules={toggleSchedules}
+            />
           ) : null}
           {creating ? (
             <View style={formStyle}>
@@ -371,7 +361,7 @@ export function Factory(props: Props) {
               />
             </View>
           ) : null}
-          {canShowContent ? (
+          {showDetail ? (
             <KitchenContent
               {...props}
               selected={selected}
@@ -785,6 +775,8 @@ function MissionHeading(
     creating: boolean;
     showSchedules: boolean;
     error?: unknown;
+    hasSelection: boolean;
+    onBack(): void;
     onRefresh(): void;
     onSchedules(): void;
   },
@@ -796,6 +788,14 @@ function MissionHeading(
         <Text style={styles.title}>{props.creating ? "Start mission" : "Missions"}</Text>
         {!props.creating ? (
           <>
+            {props.hasSelection ? (
+              <Action
+                theme={props.theme}
+                title="All missions"
+                value="back"
+                onAction={props.onBack}
+              />
+            ) : null}
             <Action
               theme={props.theme}
               title="Refresh"
@@ -823,4 +823,11 @@ function MissionHeading(
       ) : null}
     </View>
   );
+}
+
+function missionPanels(creating: boolean, selected: boolean, schedules: boolean) {
+  return {
+    showMissions: !creating && !selected && !schedules,
+    showDetail: !creating && (selected || schedules),
+  };
 }

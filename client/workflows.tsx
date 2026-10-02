@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type PluginSurfaceProps, usePaseo, useRpc } from "@getpaseo/plugin/client";
+import { type PluginSurfaceProps, useRpc } from "@getpaseo/plugin/client";
 import { useCallback, useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import {
@@ -13,20 +13,13 @@ import {
   type TeamState,
 } from "../shared/factory-contracts.js";
 import { Action, Field, Disclosure, SurfaceSheet, useFactoryStyles } from "./ui.js";
+import { RuntimeProfile } from "./runtime-profile.js";
 import { Choice } from "./choice.js";
 import { RoleBriefFields } from "./role-editor-fields.js";
-import { RoleGraph } from "./role-graph.js";
+import { WorkflowBuilder } from "./workflow-builder.js";
 import { roleTemplate, type RoleWorkflow } from "../shared/role-builder.js";
 import { resolveWorkflowSteps } from "./workflow-steps.js";
 
-const stageLabels: Record<string, string> = {
-  po: "Plan",
-  developer: "Build",
-  reviewer: "Review",
-  verifier: "Verify",
-  integrator: "Integrate",
-  tester: "Test",
-};
 const emptyProfile: RoleProfileOverride = {};
 const emptyRoles: Record<string, { title: string }> = {};
 const roleGuides: Record<string, { purpose: string; instructions: string }> = {
@@ -232,134 +225,88 @@ export function WorkflowProfiles(props: PluginSurfaceProps & { projectPath?: str
     [mutation],
   );
   const deleteProfile = useCallback((id: string) => deletion.mutate(id), [deletion]);
-  const customize = useCallback(
-    (role: string) => {
-      if (!workflow) return;
-      setEditing(roleTemplate(workflow, role, `custom-${role}-${Date.now()}`));
-      setCreating(false);
-    },
-    [workflow],
-  );
   return (
     <View style={styles.stack}>
-      <Text style={styles.title}>Team</Text>
-      <Text style={styles.text}>
-        Your Head Chef coordinates the mission. Each role has a clear responsibility and hands its
-        result to the next stage.
-      </Text>
-      <Text style={styles.muted}>
-        The standard team is ready. Edit a role to create a reusable preset with your instructions,
-        skills and model preferences.
-      </Text>
-      <View style={styles.card}>
-        <Text style={styles.heading}>Standard team</Text>
+      <WorkflowBuilder {...props} />
+      <Disclosure
+        theme={props.theme}
+        title="Reusable role presets"
+        summary="Save instructions once and apply them to a role in any workflow."
+      >
+        <View style={styles.header}>
+          <Text style={styles.heading}>Role presets</Text>
+          <Action
+            theme={props.theme}
+            title="+ Role preset"
+            variant="primary"
+            disabled={!workflow}
+            value="new"
+            onAction={create}
+          />
+        </View>
         <Text style={styles.muted}>
-          Plan → Build → Review → Verify → Integrate → Final verification
+          Save a role recipe once and reuse it in a mission. A preset changes that role’s
+          instructions; the selected workflow pack defines the handoffs.
         </Text>
-        {packs.error ? <Text style={styles.danger}>{String(packs.error)}</Text> : null}
-        {Object.entries(roles).map(([role, details]) => (
-          <View key={role} style={styles.roleLine}>
-            <View style={styles.alignedRow}>
-              <View style={styles.roleSummary}>
-                <Text style={styles.heading}>{stageLabels[role] || details.title}</Text>
-                <Text style={styles.muted}>
-                  {roleGuides[role]?.purpose || "Runs this workflow role."}
-                </Text>
-              </View>
+        {profiles.isPending ? <Text style={styles.muted}>Loading role presets…</Text> : null}
+        <LoadError {...props} label="Role presets" error={profiles.error} />
+        <LoadError {...props} label="Save role preset" error={mutation.error} />
+        <LoadError {...props} label="Delete role preset" error={deletion.error} />
+        {!profiles.isPending && profiles.data?.profiles.length === 0 ? (
+          <Text style={styles.muted}>
+            No role presets saved yet. The built-in team is ready to use.
+          </Text>
+        ) : null}
+        {profiles.data?.profiles.map((profile) => (
+          <View key={profile.id} style={styles.card}>
+            <Text style={styles.heading}>{profile.name}</Text>
+            {profile.targetRole ? (
+              <Text style={styles.muted}>
+                Role for {roles[profile.targetRole]?.title || profile.targetRole} step ·{" "}
+                {profile.brief?.outcome}
+              </Text>
+            ) : null}
+            <Text style={styles.muted}>
+              {profile.profile.provider || "Inherited provider"} /{" "}
+              {profile.profile.model || "Inherited model"} / {profile.profile.steps?.length || 0}{" "}
+              steps
+            </Text>
+            <View style={styles.row}>
               <Action
                 theme={props.theme}
                 title="Edit"
-                accessibilityLabel={`Edit ${stageLabels[role] || details.title} role`}
-                value={role}
-                onAction={customize}
-                variant="secondary"
+                accessibilityLabel={`Edit role preset ${profile.name}`}
+                value={profile}
+                onAction={edit}
               />
-            </View>
-          </View>
-        ))}
-      </View>
-      {workflow ? (
-        <Disclosure
-          theme={props.theme}
-          title="How the team hands work over"
-          summary="See the actual workflow, returns and verification gates."
-        >
-          <RoleGraph {...props} workflow={workflow} onRole={customize} />
-        </Disclosure>
-      ) : null}
-      <View style={styles.header}>
-        <Text style={styles.heading}>Role presets</Text>
-        <Action
-          theme={props.theme}
-          title="+ Role preset"
-          variant="primary"
-          disabled={!workflow}
-          value="new"
-          onAction={create}
-        />
-      </View>
-      <Text style={styles.muted}>
-        Save a role recipe once and reuse it in a mission. A preset changes that role’s
-        instructions; the selected workflow pack defines the handoffs.
-      </Text>
-      {profiles.isPending ? <Text style={styles.muted}>Loading role presets…</Text> : null}
-      <LoadError {...props} label="Role presets" error={profiles.error} />
-      <LoadError {...props} label="Save role preset" error={mutation.error} />
-      <LoadError {...props} label="Delete role preset" error={deletion.error} />
-      {!profiles.isPending && profiles.data?.profiles.length === 0 ? (
-        <Text style={styles.muted}>
-          No role presets saved yet. The built-in team is ready to use.
-        </Text>
-      ) : null}
-      {profiles.data?.profiles.map((profile) => (
-        <View key={profile.id} style={styles.card}>
-          <Text style={styles.heading}>{profile.name}</Text>
-          {profile.targetRole ? (
-            <Text style={styles.muted}>
-              Role for {roles[profile.targetRole]?.title || profile.targetRole} step ·{" "}
-              {profile.brief?.outcome}
-            </Text>
-          ) : null}
-          <Text style={styles.muted}>
-            {profile.profile.provider || "Inherited provider"} /{" "}
-            {profile.profile.model || "Inherited model"} / {profile.profile.steps?.length || 0}{" "}
-            steps
-          </Text>
-          <View style={styles.row}>
-            <Action
-              theme={props.theme}
-              title="Edit"
-              accessibilityLabel={`Edit role preset ${profile.name}`}
-              value={profile}
-              onAction={edit}
-            />
-            <Action
-              theme={props.theme}
-              title="Delete"
-              accessibilityLabel={`Delete role preset ${profile.name}`}
-              variant="danger"
-              value={profile.id}
-              onAction={setDeleteId}
-            />
-          </View>
-          {deleteId === profile.id ? (
-            <View style={styles.stack}>
-              <Text style={styles.text}>
-                Delete this library entry? Existing runs keep their saved settings.
-              </Text>
               <Action
                 theme={props.theme}
-                title="Confirm deletion"
+                title="Delete"
+                accessibilityLabel={`Delete role preset ${profile.name}`}
                 variant="danger"
                 value={profile.id}
-                onAction={deleteProfile}
-                disabled={deletion.isPending}
+                onAction={setDeleteId}
               />
-              <Action theme={props.theme} title="Keep preset" value="" onAction={setDeleteId} />
             </View>
-          ) : null}
-        </View>
-      ))}
+            {deleteId === profile.id ? (
+              <View style={styles.stack}>
+                <Text style={styles.text}>
+                  Delete this library entry? Existing runs keep their saved settings.
+                </Text>
+                <Action
+                  theme={props.theme}
+                  title="Confirm deletion"
+                  variant="danger"
+                  value={profile.id}
+                  onAction={deleteProfile}
+                  disabled={deletion.isPending}
+                />
+                <Action theme={props.theme} title="Keep preset" value="" onAction={setDeleteId} />
+              </View>
+            ) : null}
+          </View>
+        ))}
+      </Disclosure>
       {creating || editing ? (
         <WorkflowEditor
           key={editing?.id || "new"}
@@ -610,164 +557,6 @@ function WorkflowEditor(
         acceptance evidence still apply.
       </Text>
     </SurfaceSheet>
-  );
-}
-
-function RuntimeProfile(
-  props: PluginSurfaceProps & {
-    cwd: string;
-    onCwd(value: string): void;
-    value: RoleProfileOverride;
-    onChange(value: RoleProfileOverride): void;
-  },
-) {
-  const { value, onChange, cwd } = props;
-  const paseo = usePaseo();
-  const styles = useFactoryStyles(props);
-  const projects = useQuery({
-    queryKey: ["factory", "projects"],
-    queryFn: () => paseo.projects.list({}),
-  });
-  const providers = useQuery({
-    queryKey: ["factory", "providers"],
-    queryFn: async () => {
-      const result = await paseo.providers.listAvailable();
-      if (result.error) throw new Error(result.error);
-      return result.providers;
-    },
-  });
-  const models = useQuery({
-    queryKey: ["factory", "models", value.provider, cwd],
-    enabled: Boolean(value.provider && cwd),
-    queryFn: async () => {
-      const result = await paseo.providers.listModels(value.provider!, { cwd });
-      if (result.error) throw new Error(result.error);
-      return result.models?.filter((model) => model.isSelectable !== false) || [];
-    },
-  });
-  const modes = useQuery({
-    queryKey: ["factory", "modes", value.provider, cwd],
-    enabled: Boolean(value.provider && cwd),
-    queryFn: async () => {
-      const result = await paseo.providers.listModes(value.provider!, { cwd });
-      if (result.error) throw new Error(result.error);
-      return result.modes || [];
-    },
-  });
-  const projectOptions = useMemo(
-    () =>
-      (projects.data?.projects ?? []).map((project) => ({
-        id: project.projectRootPath,
-        title: project.projectDisplayName,
-      })),
-    [projects.data],
-  );
-  const providerOptions = useMemo(
-    () =>
-      (providers.data ?? []).map((provider) => ({
-        id: provider.provider,
-        title: provider.provider,
-        disabled: !provider.available,
-      })),
-    [providers.data],
-  );
-  const modelOptions = useMemo(
-    () => (models.data ?? []).map((model) => ({ id: model.id, title: model.label })),
-    [models.data],
-  );
-  const modeOptions = useMemo(
-    () => (modes.data ?? []).map((mode) => ({ id: mode.id, title: mode.label })),
-    [modes.data],
-  );
-  const thinkingOptions = useMemo(
-    () =>
-      (models.data?.find((model) => model.id === value.model)?.thinkingOptions ?? []).map(
-        (option) => ({ id: option.id, title: option.label }),
-      ),
-    [models.data, value.model],
-  );
-  const chooseProvider = useCallback(
-    (provider: string) =>
-      onChange({
-        ...value,
-        provider: provider || undefined,
-        model: undefined,
-        mode: undefined,
-        thinking: undefined,
-      }),
-    [onChange, value],
-  );
-  const chooseModel = useCallback(
-    (model: string) => onChange({ ...value, model: model || undefined, thinking: undefined }),
-    [onChange, value],
-  );
-  const chooseMode = useCallback(
-    (mode: string) => onChange({ ...value, mode: mode || undefined }),
-    [onChange, value],
-  );
-  const chooseThinking = useCallback(
-    (thinking: string) => onChange({ ...value, thinking: thinking || undefined }),
-    [onChange, value],
-  );
-  return (
-    <View style={styles.stack}>
-      <Choice
-        {...props}
-        label="Validation project"
-        value={cwd}
-        onChange={props.onCwd}
-        options={projectOptions}
-      />
-      <Field theme={props.theme} label="Project directory" value={cwd} onChange={props.onCwd} />
-      <Choice
-        {...props}
-        label="Provider override"
-        value={value.provider || ""}
-        allowEmpty
-        emptyTitle="Inherit provider"
-        options={providerOptions}
-        onChange={chooseProvider}
-      />
-      {value.provider ? (
-        <>
-          <Choice
-            {...props}
-            label="Model override"
-            value={value.model || ""}
-            allowEmpty
-            emptyTitle="Inherit model"
-            options={modelOptions}
-            onChange={chooseModel}
-          />
-          <Choice
-            {...props}
-            label="Mode override"
-            value={value.mode || ""}
-            allowEmpty
-            emptyTitle="Inherit mode"
-            options={modeOptions}
-            onChange={chooseMode}
-          />
-          <Choice
-            {...props}
-            label="Thinking override"
-            value={value.thinking || ""}
-            allowEmpty
-            emptyTitle="Inherit thinking"
-            options={thinkingOptions}
-            onChange={chooseThinking}
-          />
-        </>
-      ) : null}
-      <Text style={styles.muted}>
-        Using the same provider inherits the source or project model. Changing provider uses its
-        default model when no model override is selected.
-      </Text>
-      <LoadError {...props} label="Projects" error={projects.error} />
-      <LoadError {...props} label="Providers" error={providers.error} />
-      <LoadError {...props} label="Models" error={models.error} />
-      <LoadError {...props} label="Modes" error={modes.error} />
-    </View>
   );
 }
 
