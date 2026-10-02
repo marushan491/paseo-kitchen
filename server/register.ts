@@ -1,3 +1,4 @@
+import { workflowOf } from "./workflow-metadata.js";
 import { join } from "node:path";
 import { acquireRuntimeOwnership } from "./storage-lock.js";
 import type { KitchenRuntimeConfig } from "./runtime-config.js";
@@ -28,7 +29,7 @@ import {
 import { KitchenSchedules } from "./schedules.js";
 import type { HostControlOptions } from "./host-control.js";
 import { sdkController, factoryLogger } from "./controller.js";
-import { PackRegistry, type WorkflowPack } from "./pack.js";
+import { PackRegistry } from "./pack.js";
 import { TeamService, type TeamServiceOptions } from "./service.js";
 import { parseFactoryCompletion, factoryValidationFeedback } from "./completion.js";
 export type FactoryOptions = Omit<
@@ -271,28 +272,5 @@ export function registerFactory(server: PluginServerContext, options: FactoryOpt
         }
       }
     },
-  };
-}
-
-function workflowOf(pack: WorkflowPack) {
-  return {
-    maxParallel: pack.maxParallel,
-    roles: Object.fromEntries(
-      Object.entries(pack.roles).map(([id, role]) => [id, { title: role.title }]),
-    ),
-    boards: Object.fromEntries(
-      Object.entries(pack.boards).map(([id, board]) => [
-        id,
-        {
-          initialPhase: board.initialPhase,
-          phases: Object.fromEntries(
-            Object.entries(board.phases).map(([phaseId, phase]) => [
-              phaseId,
-              { title: phase.title, kind: phase.kind, role: phase.role },
-            ]),
-          ),
-        },
-      ]),
-    ),
   };
 }

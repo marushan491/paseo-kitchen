@@ -84,6 +84,14 @@ export type EvidenceResult = z.infer<typeof EvidenceResultSchema>;
 export const WorkflowProfileSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_-]+$/),
   name: z.string().min(1),
+  targetRole: z.string().min(1).optional(),
+  brief: z
+    .object({
+      task: z.string().min(1),
+      responsibility: z.string().min(1),
+      outcome: z.string().min(1),
+    })
+    .optional(),
   profile: RoleProfileOverrideSchema.omit({ workflowProfileId: true }),
 });
 export type WorkflowProfile = z.infer<typeof WorkflowProfileSchema>;
@@ -319,11 +327,23 @@ export const FactoryWorkflowSchema = z.object({
           title: z.string(),
           kind: z.enum(["resting", "working", "terminal"]),
           role: z.string().optional(),
+          outcomes: z.record(z.string(), z.string()).optional(),
+          next: z.string().optional(),
+          completeWithChildren: z.string().optional(),
         }),
       ),
     }),
   ),
-  roles: z.record(z.string(), z.object({ title: z.string() })),
+  roles: z.record(
+    z.string(),
+    z.object({
+      title: z.string(),
+      instructions: z.string().optional(),
+      skills: z.array(z.string()).optional(),
+      canEdit: z.boolean().optional(),
+      workspace: z.string().optional(),
+    }),
+  ),
 });
 export const factoryStatus = defineRpc({
   name: "factory.status",

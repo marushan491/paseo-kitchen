@@ -518,8 +518,13 @@ export class TeamService {
     }
     const profiles: Team["roleProfiles"] = {};
     for (const role of Object.keys(pack.roles)) {
-      const configured = await this.profiles.resolve(base, project?.[role] ?? defaults?.[role]);
-      const resolved = await this.profiles.resolve(configured, overrides?.[role]);
+      const configured = await this.profiles.resolve(
+        base,
+        project?.[role] ?? defaults?.[role],
+        role,
+        pack.id,
+      );
+      const resolved = await this.profiles.resolve(configured, overrides?.[role], role, pack.id);
       if (this.options.controller.validateProvider)
         await this.options.controller.validateProvider({ ...resolved, cwd });
       profiles[role] = resolved;
@@ -581,7 +586,12 @@ export class TeamService {
     assertMutableTeam(state.team);
     const base = state.team.roleProfiles[role];
     if (!base) throw new Error(`Unknown workflow role ${role}`);
-    const resolved = await this.profiles.resolve(base, RoleProfileOverrideSchema.parse(profile));
+    const resolved = await this.profiles.resolve(
+      base,
+      RoleProfileOverrideSchema.parse(profile),
+      role,
+      state.team.packId,
+    );
     await this.options.controller.validateProvider({ ...resolved, cwd: state.team.cwd });
     await this.store.commit(teamId, (draft) => {
       if (draft.team.status === "done" || draft.team.status === "canceled")

@@ -1,3 +1,7 @@
+import { workflowOf } from "./workflow-metadata.js";
+import { workflowConnections, roleTemplate } from "../shared/role-builder.js";
+import { FactoryWorkflowSchema } from "../shared/factory-contracts.js";
+import { kitchenPack } from "./pack.js";
 import { publishCandidate } from "./publication.js";
 import { captureTrackedFiles } from "./evidence.js";
 import { KitchenSchedules, computeNextRunAt } from "./schedules.js";
@@ -100,6 +104,80 @@ describe("TeamService", () => {
   });
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("maps a named role to an executable slot, carries its brief into the actual prompt and keeps verification returns", async () => {
+    const host = fakeHost();
+    const svc = makeService(root, host);
+    const workflow = FactoryWorkflowSchema.parse(workflowOf(kitchenPack));
+    const profile = roleTemplate(workflow, "po", "technical-planner");
+    profile.name = "Technical planner";
+    profile.brief = {
+      task: "Plan an accessible settings flow",
+      responsibility: "Own scoped tasks and dependencies",
+      outcome: "Return an observable plan with criterion evidence",
+    };
+    await svc.saveProfile(profile, root);
+    const started = await svc.startTeam({
+      bossAgentId: "boss",
+      title: "Settings",
+      objective: "Improve settings",
+      roleProfiles: { po: { workflowProfileId: profile.id } },
+    });
+    await svc.dispatchAll();
+    const prompt = host.prompts.find((entry) => entry.agentId === host.agentFor("po").id)!.prompt;
+    expect(prompt).toContain("Role: Technical planner");
+    expect(prompt).toContain("Task: Plan an accessible settings flow");
+    expect(prompt).toContain("Responsibility: Own scoped tasks and dependencies");
+    expect(prompt).toContain("Expected outcome: Return an observable plan with criterion evidence");
+    expect(prompt).toContain("factory-report");
+    await expect(
+      svc.configureWork(
+        started.team.id,
+        started.team.rootItemId,
+        "developer",
+        { workflowProfileId: profile.id },
+        "human",
+      ),
+    ).rejects.toThrow("mapped to po, not developer");
+    const restored = makeService(root, host);
+    expect((await restored.profiles.list())[0]).toMatchObject({
+      name: profile.name,
+      targetRole: "po",
+      brief: profile.brief,
+    });
+    await svc.saveProfile(roleTemplate(workflow, "developer", "single-builder"), root);
+    await expect(
+      svc.profiles.resolve(
+        { provider: "codex" },
+        { workflowProfileId: "single-builder" },
+        "integrator",
+        "kitchen-single",
+      ),
+    ).resolves.toMatchObject({ provider: "codex", workflowProfileId: "single-builder" });
+    const edges = workflowConnections(workflow);
+    expect(edges).toContainEqual({
+      id: "item:review:changes",
+      board: "item",
+      from: "review",
+      to: "implement",
+      label: "changes",
+    });
+    expect(edges).toContainEqual({
+      id: "root:verify:fail",
+      board: "root",
+      from: "verify",
+      to: "integrate",
+      label: "fail",
+    });
+    expect(edges).toContainEqual({
+      id: "root:execute:all child results verified",
+      board: "root",
+      from: "execute",
+      to: "integrate",
+      label: "all child results verified",
+    });
+    await svc.shutdown();
   });
 
   it("persists named workflows, executes ordered steps with the selected harness, and snapshots running agents", async () => {

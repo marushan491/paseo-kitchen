@@ -14,6 +14,9 @@ import {
 } from "../shared/factory-contracts.js";
 import { Action, Field, Disclosure, useFactoryStyles } from "./ui.js";
 import { Choice } from "./choice.js";
+import { RoleBriefFields } from "./role-editor-fields.js";
+import { RoleGraph } from "./role-graph.js";
+import { roleTemplate, type RoleWorkflow } from "../shared/role-builder.js";
 import { resolveWorkflowSteps } from "./workflow-steps.js";
 
 const emptyProfile: RoleProfileOverride = {};
@@ -82,14 +85,18 @@ export function RoleAssignments(
 }
 
 function profileChoices(profiles: WorkflowProfile[] | undefined) {
-  return (profiles ?? []).map((profile) => ({ id: profile.id, title: profile.name }));
+  return (profiles ?? []).map((profile) => ({
+    id: profile.id,
+    title: profile.name,
+    targetRole: profile.targetRole,
+  }));
 }
 
 function RoleChoice(
   props: PluginSurfaceProps & {
     role: string;
     title: string;
-    options: { id: string; title: string }[];
+    options: { id: string; title: string; targetRole?: string }[];
     value: Record<string, RoleProfileOverride>;
     onChange(value: Record<string, RoleProfileOverride>): void;
   },
@@ -99,6 +106,10 @@ function RoleChoice(
     (id: string) =>
       onChange({ ...value, [role]: { ...value[role], workflowProfileId: id || undefined } }),
     [role, value, onChange],
+  );
+  const compatibleOptions = useMemo(
+    () => props.options.filter((option) => !option.targetRole || option.targetRole === role),
+    [props.options, role],
   );
   const profile = value[role] || emptyProfile;
   const styles = useFactoryStyles(props);
@@ -135,7 +146,7 @@ function RoleChoice(
         {...props}
         label="Saved workflow"
         value={profile.workflowProfileId || ""}
-        options={props.options}
+        options={compatibleOptions}
         allowEmpty
         emptyTitle="Use built-in role + project defaults"
         onChange={choose}
@@ -168,8 +179,8 @@ export function WorkflowProfiles(props: PluginSurfaceProps & { projectPath?: str
   const profiles = useProfiles();
   const packsRpc = useRpc(factoryPacks);
   const packs = useQuery({ queryKey: ["factory", "packs"], queryFn: () => packsRpc({}) });
-  const roles =
-    packs.data?.packs.find((pack) => pack.id === "kitchen")?.workflow.roles || emptyRoles;
+  const workflow = packs.data?.packs.find((pack) => pack.id === "kitchen")?.workflow;
+  const roles = workflow?.roles || emptyRoles;
   const styles = useFactoryStyles(props);
   const [editing, setEditing] = useState<WorkflowProfile | null>(null);
   const [creating, setCreating] = useState(false);
@@ -194,9 +205,12 @@ export function WorkflowProfiles(props: PluginSurfaceProps & { projectPath?: str
     },
   });
   const create = useCallback(() => {
-    setEditing(null);
+    if (!workflow) return;
+    const role = workflow.roles.developer ? "developer" : Object.keys(workflow.roles)[0];
+    if (!role) return;
+    setEditing(roleTemplate(workflow, role, `role-${Date.now()}`));
     setCreating(true);
-  }, []);
+  }, [workflow]);
   const edit = useCallback((profile: WorkflowProfile) => {
     setEditing(profile);
     setCreating(false);
@@ -212,15 +226,11 @@ export function WorkflowProfiles(props: PluginSurfaceProps & { projectPath?: str
   const deleteProfile = useCallback((id: string) => deletion.mutate(id), [deletion]);
   const customize = useCallback(
     (role: string) => {
-      const title = roles[role]?.title || role;
-      setEditing({
-        id: `custom-${role}-${Date.now()}`,
-        name: `${title} workflow`,
-        profile: { instructions: roleGuides[role]?.instructions || "", steps: [] },
-      });
+      if (!workflow) return;
+      setEditing(roleTemplate(workflow, role, `custom-${role}-${Date.now()}`));
       setCreating(false);
     },
-    [roles],
+    [workflow],
   );
   return (
     <View style={styles.stack}>
@@ -233,8 +243,9 @@ export function WorkflowProfiles(props: PluginSurfaceProps & { projectPath?: str
         The standard team works immediately. Create a custom workflow only where a role needs
         different instructions.
       </Text>
+      {workflow ? <RoleGraph {...props} workflow={workflow} onRole={customize} /> : null}
       <View style={styles.card}>
-        <Text style={styles.heading}>Built-in Kitchen team</Text>
+        <Text style={styles.heading}>Standard roles · start from a template</Text>
         <Text style={styles.muted}>
           Head Chef coordinates · Plan → Build → Review → Verify → Integrate → Final verification
         </Text>
@@ -263,8 +274,9 @@ export function WorkflowProfiles(props: PluginSurfaceProps & { projectPath?: str
         <Text style={styles.heading}>Your saved workflows</Text>
         <Action
           theme={props.theme}
-          title="+ New workflow"
+          title="+ Rolle"
           variant="primary"
+          disabled={!workflow}
           value="new"
           onAction={create}
         />
@@ -285,6 +297,12 @@ export function WorkflowProfiles(props: PluginSurfaceProps & { projectPath?: str
       {profiles.data?.profiles.map((profile) => (
         <View key={profile.id} style={styles.card}>
           <Text style={styles.heading}>{profile.name}</Text>
+          {profile.targetRole ? (
+            <Text style={styles.muted}>
+              Role for {roles[profile.targetRole]?.title || profile.targetRole} step ·{" "}
+              {profile.brief?.outcome}
+            </Text>
+          ) : null}
           <Text style={styles.muted}>
             {profile.profile.provider || "Inherited provider"} ·{" "}
             {profile.profile.model || "Inherited model"} · {profile.profile.steps?.length || 0}{" "}
@@ -327,6 +345,7 @@ export function WorkflowProfiles(props: PluginSurfaceProps & { projectPath?: str
           onSave={persist}
           onCancel={cancel}
           projectPath={props.projectPath}
+          workflow={workflow}
         />
       ) : null}
     </View>
@@ -336,6 +355,7 @@ export function WorkflowProfiles(props: PluginSurfaceProps & { projectPath?: str
 function WorkflowEditor(
   props: PluginSurfaceProps & {
     initial?: WorkflowProfile;
+    workflow?: RoleWorkflow;
     projectPath?: string;
     pending: boolean;
     onSave(profile: WorkflowProfile, cwd: string): void;
@@ -343,12 +363,70 @@ function WorkflowEditor(
   },
 ) {
   const styles = useFactoryStyles(props);
-  const [name, setName] = useState(initialProfileName(props.initial));
-  const [cwd, setCwd] = useState(props.projectPath || "");
-  const [profile, setProfile] = useState<RoleProfileOverride>(
-    props.initial?.profile || emptyProfile,
+  const initial = editorInitial(props.initial);
+  const [name, setName] = useState(initial.name);
+  const [targetRole, setTargetRole] = useState(initial.targetRole);
+  const [brief, setBrief] = useState(initial.brief);
+  const roleOptions = useMemo(
+    () =>
+      Object.entries(props.workflow?.roles || {}).map(([id, details]) => ({
+        id,
+        title: details.title,
+      })),
+    [props.workflow],
   );
-  const initialSteps = props.initial?.profile.steps;
+  const chooseRole = useCallback(
+    (role: string) => {
+      setTargetRole(role);
+      if (!role) {
+        setBrief(undefined);
+        return;
+      }
+      if (props.workflow) {
+        const template = roleTemplate(props.workflow, role, "draft");
+        setName((current) =>
+          current === props.workflow?.roles[targetRole]?.title ? template.name : current,
+        );
+        setBrief(template.brief);
+        setProfile((current) => ({
+          ...current,
+          instructions: template.profile.instructions,
+          skills: template.profile.skills,
+        }));
+      }
+    },
+    [props.workflow, targetRole],
+  );
+  const taskChanged = useCallback(
+    (task: string) =>
+      setBrief((current) => ({
+        task,
+        responsibility: current?.responsibility || "",
+        outcome: current?.outcome || "",
+      })),
+    [],
+  );
+  const responsibilityChanged = useCallback(
+    (responsibility: string) =>
+      setBrief((current) => ({
+        task: current?.task || "",
+        responsibility,
+        outcome: current?.outcome || "",
+      })),
+    [],
+  );
+  const outcomeChanged = useCallback(
+    (outcome: string) =>
+      setBrief((current) => ({
+        task: current?.task || "",
+        responsibility: current?.responsibility || "",
+        outcome,
+      })),
+    [],
+  );
+  const [cwd, setCwd] = useState(props.projectPath || "");
+  const [profile, setProfile] = useState<RoleProfileOverride>(initial.profile);
+  const initialSteps = initial.profile.steps;
   const initialStepText = initialSteps?.map((step) => step.instructions).join("\n") || "";
   const [steps, setSteps] = useState(initialStepText);
   const [stepsEdited, setStepsEdited] = useState(false);
@@ -391,6 +469,8 @@ function WorkflowEditor(
         {
           id,
           name: name.trim(),
+          targetRole: targetRole || undefined,
+          brief,
           profile: {
             ...profile,
             steps: resolveWorkflowSteps(initialSteps, steps, stepsEdited),
@@ -398,40 +478,73 @@ function WorkflowEditor(
         },
         cwd.trim(),
       ),
-    [onSave, id, name, profile, initialSteps, steps, stepsEdited, cwd],
+    [onSave, id, name, profile, initialSteps, steps, stepsEdited, cwd, targetRole, brief],
   );
   return (
     <View style={styles.card}>
-      <Text style={styles.heading}>{props.initial ? "Edit workflow" : "Create workflow"}</Text>
-      <Field theme={props.theme} label="Workflow name" value={name} onChange={setName} />
+      <Text style={styles.heading}>Describe your role</Text>
+      <Choice
+        {...props}
+        label="Executable role step"
+        value={targetRole}
+        options={roleOptions}
+        allowEmpty={!initial.targetRole}
+        emptyTitle="Reusable legacy instructions · assign to a role later"
+        onChange={chooseRole}
+      />
+      <Text style={styles.muted}>
+        Changing the executable step loads that role’s template and replaces the draft description
+        and optional instructions.
+      </Text>
       <Field
         theme={props.theme}
-        label="Role instructions"
-        value={profile.instructions || ""}
-        onChange={instructionsChanged}
-        multiline
+        label="Role name"
+        value={name}
+        onChange={setName}
+        placeholder="For example: Accessibility reviewer"
       />
-      <Field
+      <RoleBriefFields
+        {...props}
+        brief={brief}
+        role={targetRole}
+        onTask={taskChanged}
+        onResponsibility={responsibilityChanged}
+        onOutcome={outcomeChanged}
+      />
+      <Disclosure
         theme={props.theme}
-        label="Ordered steps · one instruction per line"
-        value={steps}
-        onChange={stepsChanged}
-        multiline
-      />
-      {initialSteps?.length ? (
-        <Text style={styles.muted}>
-          Editing this field replaces existing step IDs, titles and multiline instructions with one
-          step per nonempty line. Leave it unchanged to preserve the original steps.
-        </Text>
-      ) : null}
-      <Field
-        theme={props.theme}
-        label="Installed skills · one per line"
-        value={skillText}
-        onChange={skillsChanged}
-        multiline
-        placeholder="Names of skills available to this role's harness"
-      />
+        title="Optional instructions, steps and skills"
+        summary="Only add detail beyond the role description"
+      >
+        <Field
+          theme={props.theme}
+          label="Role instructions"
+          value={profile.instructions || ""}
+          onChange={instructionsChanged}
+          multiline
+        />
+        <Field
+          theme={props.theme}
+          label="Ordered steps · one instruction per line"
+          value={steps}
+          onChange={stepsChanged}
+          multiline
+        />
+        {initialSteps?.length ? (
+          <Text style={styles.muted}>
+            Editing this field replaces existing step IDs, titles and multiline instructions with
+            one step per nonempty line. Leave it unchanged to preserve the original steps.
+          </Text>
+        ) : null}
+        <Field
+          theme={props.theme}
+          label="Installed skills · one per line"
+          value={skillText}
+          onChange={skillsChanged}
+          multiline
+          placeholder="Names of skills available to this role's harness"
+        />
+      </Disclosure>
       <Disclosure
         theme={props.theme}
         title="Project & model preferences"
@@ -447,10 +560,10 @@ function WorkflowEditor(
       <View style={styles.row}>
         <Action
           theme={props.theme}
-          title={props.pending ? "Saving…" : "Save workflow"}
+          title={props.pending ? "Saving…" : "Save role"}
           variant="primary"
           value="save"
-          disabled={props.pending || !id || !name.trim() || !cwd.trim()}
+          disabled={props.pending || !id || !name.trim() || !cwd.trim() || !validBrief(brief)}
           onAction={persist}
         />
         <Action
@@ -671,7 +784,13 @@ export function WorkItemProfileSettings(
     () => Object.entries(props.roles).map(([id, details]) => ({ id, title: details.title })),
     [props.roles],
   );
-  const profileOptions = useMemo(() => profileChoices(profiles.data?.profiles), [profiles.data]);
+  const profileOptions = useMemo(
+    () =>
+      profileChoices(profiles.data?.profiles).filter(
+        (entry) => !entry.targetRole || entry.targetRole === role,
+      ),
+    [profiles.data, role],
+  );
   const chooseRole = useCallback(
     (value: string) => {
       setRole(value);
@@ -769,6 +888,17 @@ export function WorkItemProfileSettings(
   );
 }
 
-function initialProfileName(profile?: WorkflowProfile) {
-  return profile?.name || "";
+function editorInitial(profile?: WorkflowProfile) {
+  return {
+    name: profile?.name || "",
+    targetRole: profile?.targetRole || "",
+    brief: profile?.brief,
+    profile: profile?.profile || emptyProfile,
+  };
+}
+
+function validBrief(brief?: WorkflowProfile["brief"]) {
+  return (
+    !brief || Boolean(brief.task.trim() && brief.responsibility.trim() && brief.outcome.trim())
+  );
 }
