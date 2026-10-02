@@ -285,6 +285,62 @@ describe("native Kitchen adapter", () => {
     expect(f.create).not.toHaveBeenCalled();
   });
 
+  it("rejects actual Head Chef tool creation while allowing Factory SDK workers and ordinary chats", async () => {
+    const f = await fixture();
+    const mission = await startNativeMission(f.paseo, f.service, f.input);
+    let guard: (
+      input: unknown,
+      context: { paseo: PaseoApi; origin?: { kind: string; agentId?: string; pluginId?: string } },
+    ) => Promise<void>;
+    const removeGuard = vi.fn();
+    const removeAccepted = vi.fn();
+    const server = {
+      supportsLifecycleEvent: () => true,
+      supportsBeforeHookOrigin: (name: string) => name === "agent.create",
+      handle: vi.fn(),
+      on: () => removeAccepted,
+      before: (name: string, handler: typeof guard) => {
+        expect(name).toBe("agent.create");
+        guard = handler;
+        return removeGuard;
+      },
+    } as unknown as PluginServerContext;
+    const cleanup = registerNativeEntry(server, async () => f.service);
+    const spoofed = {
+      request: { config: { provider: "opencode", title: "Factory Verifier" } },
+    };
+    await expect(
+      guard!(spoofed, { paseo: f.paseo, origin: { kind: "agent", agentId: mission.agentId } }),
+    ).rejects.toThrow(/cannot create unmanaged agents/);
+    await expect(
+      guard!(spoofed, {
+        paseo: f.paseo,
+        origin: { kind: "plugin", pluginId: "agent-factory", agentId: mission.agentId },
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      guard!(spoofed, { paseo: f.paseo, origin: { kind: "agent", agentId: "ordinary-chat" } }),
+    ).resolves.toBeUndefined();
+    await expect(guard!(spoofed, { paseo: f.paseo, origin: { kind: "agent" } })).rejects.toThrow(
+      /missing its agent identity/,
+    );
+    await f.service.store.commit(mission.teamId, (draft) => {
+      draft.team.status = "canceled";
+      return { events: [], result: null };
+    });
+    await expect(
+      guard!(spoofed, { paseo: f.paseo, origin: { kind: "agent", agentId: mission.agentId } }),
+    ).resolves.toBeUndefined();
+    cleanup();
+    expect(removeGuard).toHaveBeenCalledOnce();
+    expect(removeAccepted).toHaveBeenCalledOnce();
+    expect(f.create.mock.calls[0]![0].config).toMatchObject({
+      systemPrompt: expect.stringContaining(
+        "Do not call create_agent or spawn unmanaged subagents",
+      ),
+    });
+  });
+
   it("keeps old hosts explicitly unavailable without registering an unsupported hook", async () => {
     const handlers = new Map<string, (input: unknown, context: unknown) => Promise<unknown>>();
     const on = vi.fn();
@@ -294,6 +350,8 @@ describe("native Kitchen adapter", () => {
         handler: (input: unknown, context: unknown) => Promise<unknown>,
       ) => handlers.set(rpc.name, handler),
       on,
+      supportsLifecycleEvent: () => true,
+      supportsBeforeHookOrigin: () => false,
     } as unknown as PluginServerContext;
     const ready = vi.fn();
     registerNativeEntry(server, ready);

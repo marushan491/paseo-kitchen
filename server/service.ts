@@ -1393,6 +1393,20 @@ export class TeamService {
     return out;
   }
 
+  async assertNativeAgentCreationAllowed(callerAgentId: string): Promise<void> {
+    for (const teamId of await this.store.listIds()) {
+      const state = await this.store.get(teamId);
+      if (
+        state?.team.kitchen?.nativeConversation &&
+        state.team.bossAgentId === callerAgentId &&
+        !["done", "canceled"].includes(state.team.status)
+      )
+        throw new Error(
+          "Kitchen Head Chef cannot create unmanaged agents. Request work through the managed Kitchen workflow and await its verified result.",
+        );
+    }
+  }
+
   async syncNativeHeadChefTitle(agentId: string): Promise<void> {
     const agent = await this.options.controller.get(agentId);
     if (!agent?.title?.trim() || agent.title === "New session") return;

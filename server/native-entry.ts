@@ -26,9 +26,10 @@ interface AcceptedMessage {
 }
 type NativeHost = PluginServerContext & {
   supportsLifecycleEvent?(name: string): boolean;
+  supportsBeforeHookOrigin?(name: string): boolean;
 };
 const unavailable =
-  "Update the host to use Kitchen in the native composer. The daemon needs accepted-message lifecycle support.";
+  "Update the host to use Kitchen in the native composer. The daemon needs accepted-message lifecycle and trusted agent-creation origin support.";
 
 export function promptReferences(prompt: AgentPromptInput) {
   if (typeof prompt === "string") return {};
@@ -62,7 +63,9 @@ function coordinationConfig(
 ) {
   const guidance = [
     config.systemPrompt,
-    "You are Kitchen's Head Chef for this native conversation. Coordinate the mission, clarify missing requirements, and keep the user informed. Kitchen assigns implementation to its managed roles. Do not bypass independent verification or human acceptance.",
+    "You are Kitchen's Head Chef for this native conversation. Coordinate the mission, clarify missing requirements, and keep the user informed. Kitchen owns role assignment, isolated worktrees, review, independent verification, and final human acceptance.",
+    "Do not call create_agent or spawn unmanaged subagents. Do not implement, edit, commit, or integrate changes in the source checkout. Request additional work through Kitchen's managed work-request routes. Answer Kitchen's requirements questions through its structured completion report.",
+    "Read the actual Kitchen mission state before reporting progress. A completed Head Chef chat turn or a worker's claim is not mission completion. Report pending reviews, permissions, verification, and human acceptance as pending. Describe a finished result only when the actual Kitchen workflow has verified it; distinguish a verified integration candidate from final human acceptance. Never claim approval or bypass the final human gate.",
     profile.instructions,
     ...(profile.steps ?? []).map((step) => step.instructions),
     profile.skills?.length
@@ -183,7 +186,9 @@ export function registerNativeEntry(
   service: (paseo: PaseoApi) => Promise<TeamService>,
 ) {
   const host = server as NativeHost;
-  const supported = host.supportsLifecycleEvent?.("agent.user_message_accepted") === true;
+  const supported =
+    host.supportsLifecycleEvent?.("agent.user_message_accepted") === true &&
+    host.supportsBeforeHookOrigin?.("agent.create") === true;
   server.handle(factoryNativePresets, async (input, { paseo }) => {
     if (!supported)
       return { presets: [], defaultPresetId: "kitchen", unavailableReason: unavailable };
@@ -204,7 +209,17 @@ export function registerNativeEntry(
     name: "agent.user_message_accepted",
     handler: (event: AcceptedMessage, context: PluginHookContext) => Promise<void>,
   ) => () => void;
-  return on("agent.user_message_accepted", async (event, { paseo, signal }) => {
+  const removeGuard = server.before("agent.create", async (_input, context) => {
+    const origin = (
+      context as PluginHookContext & {
+        origin?: { kind: "agent" | "plugin" | "client" | "system" | "unknown"; agentId?: string };
+      }
+    ).origin;
+    if (origin?.kind !== "agent") return;
+    if (!origin.agentId) throw new Error("Agent creation origin is missing its agent identity");
+    await (await service(context.paseo)).assertNativeAgentCreationAllowed(origin.agentId);
+  });
+  const removeAccepted = on("agent.user_message_accepted", async (event, { paseo, signal }) => {
     if (signal.aborted) return;
     await (
       await service(paseo)
@@ -216,4 +231,8 @@ export function registerNativeEntry(
       origin: { kind: event.origin },
     });
   });
+  return () => {
+    removeGuard();
+    removeAccepted();
+  };
 }
