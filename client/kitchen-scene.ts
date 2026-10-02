@@ -81,17 +81,17 @@ function label(group: Group, title: string, subtitle: string, palette: OfficePal
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.fillStyle = palette.foreground;
-  context.font = "600 42px sans-serif";
+  context.font = "600 64px sans-serif";
   context.fillText(title, 320, 55);
   context.fillStyle = palette.muted;
-  context.font = "28px sans-serif";
+  context.font = "40px sans-serif";
   context.fillText(subtitle, 320, 110);
   const texture = new CanvasTexture(
     canvas as unknown as ConstructorParameters<typeof CanvasTexture>[0],
   );
   const sprite = new Sprite(new SpriteMaterial({ map: texture, depthTest: false }));
   sprite.position.set(0, 0.1, 2);
-  sprite.scale.set(2.8, 0.7, 1);
+  sprite.scale.set(4, 1, 1);
   group.add(sprite);
 }
 export function createKitchen(palette: OfficePalette) {
