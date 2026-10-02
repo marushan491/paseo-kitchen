@@ -161,3 +161,57 @@ it("never sends a repository symlink's private target to Jev", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+it("designs a typed structural Security stage without applying and refuses unsupported or uncertain requests", async () => {
+  const { definitionFromPack } = await import("./workflow-definitions.js");
+  const { kitchenPack } = await import("./pack.js");
+  const { validateDefinition } = await import("./workflow-definitions.js");
+  const definition = definitionFromPack(kitchenPack, "secure-team");
+  let confidence = 0.9;
+  const fetcher = vi.fn(
+    async () =>
+      new Response(
+        JSON.stringify({
+          model: "jev-test",
+          answers: {
+            decision: {
+              choice: "security",
+              confidence,
+              probabilities: Object.fromEntries(
+                Object.keys((await import("./workflow-design.js")).workflowDesignChoices).map(
+                  (key) => [key, key === "security" ? confidence : (1 - confidence) / 10],
+                ),
+              ),
+            },
+          },
+        }),
+        { status: 200 },
+      ),
+  );
+  const source = new KitchenSystemOne({
+    config: async () => ({ enabled: true, minimumConfidence: 0.8 }),
+    credentials: async () => ["synthetic-test-key"],
+    fetch: fetcher,
+  });
+  const result = await source.designWorkflow({
+    definition,
+    cwd: "/fixture",
+    request: "Add Security after Review only when auth changes",
+  });
+  expect(result.definition.boards.item.phases.review.outcomes!.approve).toBe("security-review");
+  expect(
+    validateDefinition(result.definition, kitchenPack).roles["security-reviewer"].canEdit,
+  ).toBe(false);
+  expect(definition.roles["security-reviewer"]).toBeUndefined();
+  const body = JSON.parse(fetcher.mock.calls[0]![1]!.body as string);
+  expect(body.questions.decision.type).toBe("choice");
+  expect(body.questions.decision.criteria.human).toContain("independent verification");
+  confidence = 0.3;
+  await expect(
+    source.designWorkflow({
+      definition,
+      cwd: "/fixture",
+      request: "Invent arbitrary unsupported rules",
+    }),
+  ).rejects.toThrow("clarification");
+});

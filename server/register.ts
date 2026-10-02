@@ -1,3 +1,9 @@
+import {
+  factoryWorkflowsList,
+  factoryWorkflowSave,
+  factoryWorkflowPreview,
+  factoryWorkflowApply,
+} from "../shared/workflow-contracts.js";
 import { workflowOf } from "./workflow-metadata.js";
 import { join } from "node:path";
 import { acquireRuntimeOwnership } from "./storage-lock.js";
@@ -120,6 +126,22 @@ export function registerFactory(server: PluginServerContext, options: FactoryOpt
     });
     return starting;
   };
+  server.handle(factoryWorkflowsList, async (_, { paseo }) => {
+    const factory = await ready(paseo);
+    return {
+      workflows: await factory.workflows.list(),
+      templates: await factory.workflowTemplates(),
+    };
+  });
+  server.handle(factoryWorkflowSave, async (input, { paseo }) =>
+    (await ready(paseo)).workflows.save(input.definition, input.expectedRevision),
+  );
+  server.handle(factoryWorkflowPreview, async (input, { paseo }) =>
+    (await ready(paseo)).previewWorkflow(input),
+  );
+  server.handle(factoryWorkflowApply, async (input, { paseo }) =>
+    (await ready(paseo)).workflows.apply(input.previewId, input.expectedRevision),
+  );
   server.handle(factoryProfilesList, async (_, { paseo }) => ({
     profiles: await (await ready(paseo)).profiles.list(),
   }));
@@ -218,7 +240,18 @@ export function registerFactory(server: PluginServerContext, options: FactoryOpt
     if (disposed || options.enabled?.() === false) return;
     const factory = await ready(paseo);
     const caller = await factory.resolveCaller(event.agent.id);
-    if (!caller || caller.binding.turn === "reported") return;
+    if (!caller) {
+      const snapshot = await paseo.agents.ref(event.agent.id).refresh();
+      if (
+        snapshot?.agent.labels?.["agent-factory.team.boss"] === "true" &&
+        event.outcome.kind === "completed"
+      ) {
+        const completion = parseFactoryCompletion(event.timeline);
+        if (completion) await factory.acceptHeadChefAnswer(event.agent.id, completion.report);
+      }
+      return;
+    }
+    if (caller.binding.turn === "reported") return;
     let validationError: string | undefined;
     if (event.outcome.kind === "completed") {
       try {

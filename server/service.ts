@@ -1,3 +1,10 @@
+import { workflowHead, observeChangedFiles } from "./workflow-runtime.js";
+import {
+  WorkflowDefinitions,
+  definitionFromPack,
+  packFromSnapshot,
+} from "./workflow-definitions.js";
+import type { WorkflowDefinition } from "../shared/workflow-contracts.js";
 import { resolveAgentCapacity } from "./capacity-policy.js";
 import type { KitchenDecisionSource } from "./system-one.js";
 import {
@@ -132,11 +139,13 @@ export class TeamService {
   private dispatchRun: Promise<void> | null = null;
   private dispatchAgain = false;
   private readonly now: () => Date;
+  readonly workflows: WorkflowDefinitions;
   private readonly kitchenStarts = new Map<string, Promise<TeamState>>();
   private kitchenStartChain: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly options: TeamServiceOptions) {
     this.profiles = new WorkflowProfiles(options.storageRoot);
+    this.workflows = new WorkflowDefinitions(options.storageRoot, options.packs);
     this.store = new TeamStore(join(options.storageRoot, "teams"));
     this.logger = options.logger.child({ module: "team" });
     this.now = options.now ?? (() => new Date());
@@ -192,6 +201,7 @@ export class TeamService {
     return { ...pack, maxParallel: this.capacity() };
   }
   private pack(team: Team): WorkflowPack {
+    if (team.workflowSnapshot) return this.limitPack(packFromSnapshot(team.workflowSnapshot));
     const pack = this.options.packs.get(team.packId);
     if (!pack) throw new Error(`Workflow pack ${team.packId} is not installed`);
     return this.limitPack(pack);
@@ -216,7 +226,9 @@ export class TeamService {
     )
       return;
     await this.syncKitchenBoss(state.team);
-    const pack = this.options.packs.get(state.team.packId);
+    const pack = state.team.workflowSnapshot
+      ? packFromSnapshot(state.team.workflowSnapshot)
+      : this.options.packs.get(state.team.packId);
     if (!pack || pack.version !== state.team.packVersion) {
       const canMigrate = pack?.migrate && state.team.packVersion < pack.version;
       if (!canMigrate) {
@@ -404,16 +416,16 @@ export class TeamService {
     acceptanceCriteria?: Array<{ id: string; text: string }>;
     roleProfiles?: Record<string, RoleProfileOverride>;
     policy?: Team["policy"];
+    workflowSnapshot?: WorkflowDefinition;
   }): Promise<TeamState> {
     const boss = await this.options.controller.get(params.bossAgentId);
     if (!boss) throw new Error(`Boss agent ${params.bossAgentId} not found`);
     if (boss.labels?.[TEAM_ROLE_LABEL]) throw new Error("Team members cannot start teams");
     const cwd = params.cwd ?? boss.cwd;
     const profile = await readProjectProfile(cwd);
-    const resolved = await this.options.packs.resolveFor(
-      cwd,
-      params.packId ?? profile.workflowPack,
-    );
+    const resolved = params.workflowSnapshot
+      ? packFromSnapshot(params.workflowSnapshot)
+      : await this.options.packs.resolveFor(cwd, params.packId ?? profile.workflowPack);
     const pack = resolved ? this.limitPack(resolved) : undefined;
     if (!pack)
       throw new Error(`Workflow pack ${params.packId ?? profile.workflowPack} is not installed`);
@@ -436,6 +448,8 @@ export class TeamService {
     });
     state.team.runtime = runtimeState(params.policy, this.capacity());
     state.team.policy = params.policy;
+    if (params.workflowSnapshot)
+      state.team.workflowSnapshot = structuredClone(params.workflowSnapshot);
     if (params.kitchen) state.team.kitchen = params.kitchen;
     if (params.acceptanceCriteria)
       state.items[state.team.rootItemId]!.acceptanceCriteria = params.acceptanceCriteria;
@@ -564,6 +578,45 @@ export class TeamService {
       );
   }
 
+  private async selectedWorkflow(id?: string) {
+    return id ? this.workflows.get(id) : undefined;
+  }
+  async workflowTemplates() {
+    return ["kitchen", "kitchen-single"].map((id) =>
+      definitionFromPack(this.options.packs.get(id)!, id),
+    );
+  }
+  async previewWorkflow(input: {
+    id: string;
+    basePackId: string;
+    cwd: string;
+    request: string;
+    expectedRevision: number;
+    role?: string;
+  }) {
+    const current = (await this.workflows.list()).find((entry) => entry.id === input.id);
+    if ((current?.revision ?? 0) !== input.expectedRevision)
+      throw new Error("Workflow revision conflict");
+    const base = this.options.packs.get(input.basePackId);
+    if (!base) throw new Error("Workflow base pack not found");
+    const definition = current ?? definitionFromPack(base, input.id);
+    if (definition.basePackId !== input.basePackId) throw new Error("Workflow base pack conflict");
+    if (!this.options.decisionSource?.designWorkflow)
+      throw new Error("Configure System One before requesting a workflow preview");
+    const result = await this.options.decisionSource.designWorkflow({
+      definition,
+      cwd: input.cwd,
+      request: input.request,
+      role: input.role,
+    });
+    if (
+      result.definition.id !== definition.id ||
+      result.definition.revision !== definition.revision
+    )
+      throw new Error("Workflow design changed immutable identity or revision");
+    return this.workflows.preview(result.definition, result);
+  }
+
   async saveProfile(profile: WorkflowProfile, cwd: string): Promise<WorkflowProfile> {
     const directory = await realpath(cwd);
     if (profile.profile.provider)
@@ -690,7 +743,12 @@ export class TeamService {
     }
     if (classification && classification.executionMode !== "human")
       resolvedMode = classification.executionMode;
-    const effective = { ...params, executionMode: resolvedMode };
+    const workflowSnapshot = await this.selectedWorkflow(params.workflowId);
+    const effective = {
+      ...params,
+      executionMode: resolvedMode,
+      roleProfiles: mergeWorkflowProfiles(workflowSnapshot?.roleProfiles, params.roleProfiles),
+    };
     const { cwd, pack, criteria, workspaceId } = await this.prepareKitchen(effective);
     const active = await this.findActiveKitchen(params, cwd, pack.id, fingerprint);
     if (active) return active;
@@ -711,7 +769,8 @@ export class TeamService {
       packId: pack.id,
       force: true,
       acceptanceCriteria: criteria,
-      roleProfiles: params.roleProfiles,
+      roleProfiles: effective.roleProfiles,
+      workflowSnapshot,
       policy: params.policy,
       kitchen: {
         idempotencyKey: params.idempotencyKey,
@@ -719,7 +778,7 @@ export class TeamService {
         mode: "accompanied",
         workflowMode: kitchenWorkflowMode(params),
         missionMode: kitchenMissionMode(params),
-        executionMode: pack.id === "kitchen-single" ? "single" : "team",
+        executionMode: workflowExecutionMode(workflowSnapshot, pack),
         classification,
         spec: params.spec,
         publication: params.publication,
@@ -756,7 +815,16 @@ export class TeamService {
     if (params.executionMode === "team" && requestedPack === "kitchen-single")
       throw new Error("Team execution cannot use the single pack");
     const packId = params.executionMode === "single" ? "kitchen-single" : requestedPack;
-    const pack = await this.options.packs.resolveFor(cwd, packId);
+    const definition = params.workflowId ? await this.workflows.get(params.workflowId) : undefined;
+    if (
+      definition &&
+      params.executionMode === "single" &&
+      definition.basePackId !== "kitchen-single"
+    )
+      throw new Error("Single execution requires a single workflow variant");
+    const pack = definition
+      ? packFromSnapshot(definition)
+      : await this.options.packs.resolveFor(cwd, packId);
     if (!pack) throw new Error(`Workflow pack ${packId} is not installed`);
     if (!this.options.controller.validateProvider)
       throw new Error("Kitchen provider preflight is not configured");
@@ -1250,6 +1318,7 @@ export class TeamService {
       const events: TeamEventDraft[] = [{ type: "human.message", actor, text }];
       for (const item of Object.values(draft.items)) {
         if (item.phase === "blocked") {
+          delete item.pack.headChefQuestion;
           item.reports.push({ role: "boss", phase: "blocked", outcome: "answer", summary: text });
           item.returns = 0;
           const pack = this.pack(draft.team);
@@ -1383,6 +1452,7 @@ export class TeamService {
     const team = await this.store.get(caller.teamId);
     if (team) assertMutableTeam(team.team);
     const role = team ? this.pack(team.team).roles[caller.binding.role] : undefined;
+    this.assertCommunication(role, payload, team);
     const checks = await this.verifyReportCheckout(
       agentId,
       team,
@@ -1439,6 +1509,8 @@ export class TeamService {
           result: `Report accepted. ${item.title} is now in ${item.phase}. Stop here.`,
         };
       });
+      if (payload.needs?.kind === "head-chef")
+        await this.askHeadChef(caller.teamId, caller.binding.workItemId, payload.needs.text);
       void this.dispatchAll();
       return result;
     } catch (error) {
@@ -1459,6 +1531,144 @@ export class TeamService {
     }
   }
 
+  private assertCommunication(
+    role: Role | undefined,
+    payload: TeamReportPayload,
+    state: TeamState | null,
+  ) {
+    if (payload.needs?.kind !== "head-chef") return;
+    if (["requirements", "irreversible"].includes(payload.needs.category ?? ""))
+      throw new ReportRejectedError(
+        "Requirements and irreversible-action decisions must route to a human",
+      );
+    const architectureAllowed =
+      payload.needs.category === "architecture" &&
+      state?.team.workflowSnapshot?.autonomy?.architecture === "head-chef";
+    if (
+      !architectureAllowed &&
+      (role as WorkflowDefinition["roles"][string] | undefined)?.communication?.clarification !==
+        "head-chef"
+    )
+      throw new ReportRejectedError("This role routes clarification to the human, not Head Chef");
+  }
+
+  private async askHeadChef(teamId: string, workItemId: string, text: string) {
+    const prompt = await this.store.commit(teamId, (draft) => {
+      const item = draft.items[workItemId];
+      if (!item || item.phase !== "blocked") return { events: [], result: null };
+      const request = { requestId: newId("question"), workItemId, revision: item.revision };
+      item.pack.headChefQuestion = request;
+      return {
+        events: [
+          {
+            type: "communication.head-chef-requested",
+            actor: RUNTIME,
+            workItemId,
+            text,
+            data: request,
+          },
+        ],
+        result: { bossId: draft.team.bossAgentId, request },
+      };
+    });
+    if (!prompt) return;
+    try {
+      await this.options.controller.send(
+        prompt.bossId,
+        `A worker requests routine clarification: ${text}\nResolve only within the existing mission authority. Requirements or irreversible actions still need a human. Return one factory-report fence with report.outcome "head-chef-answer" and report.summary containing a JSON string with these exact fields plus answer: ${JSON.stringify(prompt.request)}. Use answer only for the scoped clarification; never approve the result, merge or deploy.`,
+        "steer",
+      );
+    } catch (error) {
+      await this.store.commit(teamId, () => ({
+        events: [
+          {
+            type: "communication.head-chef-send-failed",
+            actor: RUNTIME,
+            workItemId,
+            text:
+              error instanceof Error
+                ? error.message
+                : "Head Chef unavailable; human answer remains available",
+          },
+        ],
+        result: null,
+      }));
+    }
+  }
+
+  async acceptHeadChefAnswer(agentId: string, payload: TeamReportPayload): Promise<boolean> {
+    if (payload.outcome !== "head-chef-answer") return false;
+    const answer = z
+      .object({
+        requestId: z.string(),
+        workItemId: z.string(),
+        revision: z.number().int(),
+        answer: z.string().min(1).max(16000),
+      })
+      .parse(JSON.parse(payload.summary));
+    const teams = await this.listForBoss(agentId);
+    const state = teams.find((entry) => entry.items[answer.workItemId]);
+    if (!state) return false;
+    await this.store.commit(state.team.id, (draft) => {
+      assertMutableTeam(draft.team);
+      const item = draft.items[answer.workItemId];
+      const request = item?.pack.headChefQuestion as { requestId?: string } | undefined;
+      if (
+        draft.team.bossAgentId !== agentId ||
+        draft.team.status !== "active" ||
+        !item ||
+        item.phase !== "blocked" ||
+        item.revision !== answer.revision ||
+        request?.requestId !== answer.requestId
+      )
+        throw new Error("Head Chef answer is stale or does not match this pending question");
+      const pack = this.pack(draft.team),
+        previous = item.phaseHistory.findLast(
+          (history) => boardOf(pack, item).phases[history.phase]?.kind === "working",
+        );
+      if (!previous) throw new Error("No worker phase to resume");
+      item.reports.push({
+        role: "boss",
+        phase: "blocked",
+        outcome: "answer",
+        summary: answer.answer,
+      });
+      delete item.pack.headChefQuestion;
+      const events: TeamEventDraft[] = [
+        {
+          type: "communication.head-chef-answered",
+          actor: { type: "boss", id: agentId },
+          workItemId: item.id,
+          text: answer.answer,
+        },
+      ];
+      enterPhase(
+        draft,
+        pack,
+        item,
+        previous.phase,
+        { type: "boss", id: agentId },
+        events,
+        "Head Chef answered",
+      );
+      return { events, result: null };
+    });
+    void this.dispatchAll();
+    return true;
+  }
+
+  private needsProtectedVerification(state: TeamState, role: Role | undefined): boolean {
+    if (role?.id === "verifier") return true;
+    return Boolean(
+      state.team.workflowSnapshot &&
+      role &&
+      !role.canEdit &&
+      Object.values(state.team.workflowSnapshot.boards.item.phases).some(
+        (phase) => phase.role === role.id && phase.condition,
+      ),
+    );
+  }
+
   private async verifyReportCheckout(
     agentId: string,
     state: TeamState | null,
@@ -1468,8 +1678,9 @@ export class TeamService {
     if (
       !state ||
       !this.pack(state.team).requireVerification ||
-      role?.id !== "verifier" ||
-      payload.outcome !== "pass"
+      !this.needsProtectedVerification(state, role) ||
+      payload.outcome !== "pass" ||
+      payload.needs
     )
       return [];
     const record = await this.options.controller.get(agentId);
@@ -1592,6 +1803,16 @@ export class TeamService {
     return checks;
   }
 
+  private async recordWorkflowBaseline(state: TeamState, item: WorkItem, role: Role, cwd: string) {
+    if (!state.team.workflowSnapshot || !role.canEdit || item.pack.workflowBaseCommit) return;
+    const commit = await workflowHead(cwd);
+    await this.store.commit(state.team.id, (draft) => {
+      const target = draft.items[item.id];
+      if (target && !target.pack.workflowBaseCommit) target.pack.workflowBaseCommit = commit;
+      return { events: [], result: null };
+    });
+  }
+
   private async protectVerifier(
     state: TeamState,
     item: WorkItem,
@@ -1599,7 +1820,8 @@ export class TeamService {
     agentId: string,
     cwd: string,
   ): Promise<void> {
-    if (!this.pack(state.team).requireVerification || role.id !== "verifier") return;
+    if (!this.pack(state.team).requireVerification || !this.needsProtectedVerification(state, role))
+      return;
     const existing = item.pack.verifierProtection as
       | { agentId: string; revision: number }
       | undefined;
@@ -1822,6 +2044,84 @@ export class TeamService {
     return active.size;
   }
 
+  private async safeConditionalDecision(
+    state: TeamState | null,
+    decision: TeamState["decisions"][string] | undefined,
+  ) {
+    try {
+      return await this.skipConditionalDecision(state, decision);
+    } catch (error) {
+      if (!state || !decision) throw error;
+      await this.store.commit(state.team.id, (draft) => {
+        const item = draft.items[decision.workItemId];
+        if (!item || item.phase !== decision.phase || draft.team.status !== "active")
+          return { events: [], result: null };
+        const events: TeamEventDraft[] = [];
+        blockForBoss(
+          draft,
+          this.pack(draft.team),
+          item,
+          `Conditional workflow evidence unavailable: ${error instanceof Error ? error.message : "unknown error"}`,
+          events,
+        );
+        return { events, result: null };
+      });
+      return true;
+    }
+  }
+
+  private async skipConditionalDecision(
+    state: TeamState | null,
+    decision: TeamState["decisions"][string] | undefined,
+  ): Promise<boolean> {
+    if (
+      state?.team.workflowSnapshot &&
+      decision &&
+      ["start-role", "message-role"].includes(decision.kind)
+    ) {
+      const item = state.items[decision.workItemId];
+      const phase = item ? boardOf(this.pack(state.team), item).phases[item.phase] : undefined;
+      if (item && decision.phase === item.phase && phase?.condition && phase.skipTo) {
+        const checkout = await this.itemWorktree(state, item);
+        const observed = await observeChangedFiles(
+          checkout,
+          String(item.pack.workflowBaseCommit ?? ""),
+          phase.condition,
+        );
+        const skipped = await this.store.commit(state.team.id, (draft) => {
+          const target = draft.items[item.id];
+          if (!target || target.revision !== item.revision || draft.team.status !== "active")
+            return { events: [], result: true };
+          target.pack.workflowCondition = observed;
+          const events: TeamEventDraft[] = [
+            {
+              type: "workflow.condition-observed",
+              actor: RUNTIME,
+              workItemId: item.id,
+              text: observed.matches
+                ? "Changed files require the configured check"
+                : "Observed changed files do not match the configured check",
+              data: observed,
+            },
+          ];
+          if (!observed.matches)
+            enterPhase(
+              draft,
+              this.pack(draft.team),
+              target,
+              phase.skipTo!,
+              RUNTIME,
+              events,
+              "observed changed-file condition did not match",
+            );
+          return { events, result: !observed.matches };
+        });
+        if (skipped) return true;
+      }
+    }
+    return false;
+  }
+
   private async runDecision(teamId: string, decisionId: string): Promise<void> {
     const state = await this.store.get(teamId);
     const decision = state?.decisions[decisionId];
@@ -1830,6 +2130,7 @@ export class TeamService {
       (await this.activeCookCount()) >= this.capacity()
     )
       return;
+    if (await this.safeConditionalDecision(state, decision)) return;
     const leased = await this.store.commit(teamId, (draft) => {
       const d = draft.decisions[decisionId];
       if (
@@ -1981,6 +2282,7 @@ export class TeamService {
       return { events: [], result: true };
     });
     if (!allowed) return () => [];
+    await this.recordWorkflowBaseline(state, item, role, record!.cwd);
     await this.protectVerifier(state, item, role, binding.agentId, record!.cwd);
     await this.options.controller.send(binding.agentId, text);
     return (draft) => {
@@ -2149,6 +2451,7 @@ export class TeamService {
       const latest = await this.store.get(state.team.id);
       if (latest?.team.status !== "active" || latest.decisions[decision.id]?.status !== "leased")
         return () => [];
+      await this.recordWorkflowBaseline(state, item, role, record!.cwd);
       await this.protectVerifier(state, item, role, agentId, record!.cwd);
       await this.options.controller.send(agentId, await this.workPacket(state, pack, item, role));
     }
@@ -2334,7 +2637,7 @@ export class TeamService {
       '- artifacts is an array of objects {"kind":"commit","ref":"commit hash or evidence location","note":"optional description"}. kind must be branch, commit, pr, screenshot, test-run, document or other. Never use artifact strings.',
       '- criteria is an array of objects {"id":"exact acceptance criterion ID above","met":true,"evidence":"concrete check and result"}. id and evidence are strings; met is a boolean. Never use criterion strings or a field named criterion.',
       "- Omit optional artifacts and criteria when there is no concrete evidence. The PO plans future acceptanceCriteria; it must omit report.criteria and report.artifacts unless it actually collected concrete evidence.",
-      '- Optional needs shape: {"kind":"human","text":"the decision needed"}; kind must be human, research or split.',
+      '- Optional needs shape: {"kind":"human","text":"the decision needed"}; kind must be human, research or split. Use head-chef only when the configured communication route below explicitly allows it.',
       "- Omit items unless you are the planning role. PO items are objects with key, title, objective (nonempty strings), acceptanceCriteria (nonempty array of strings), optional dependsOn and conflictsWith (arrays of item key strings), optional exclusive (boolean).",
       ...(role.tools.includes("item_plan")
         ? [
@@ -2349,6 +2652,7 @@ export class TeamService {
         : "- Do not change any files.",
       "- You cannot start other agents. Everything you hand on goes through your final factory-report block.",
     );
+    lines.push(...workflowCommunication(state, role));
     return lines.join("\n");
   }
 
@@ -2624,7 +2928,12 @@ function reportExample(
   outcome: string | undefined,
 ): Record<string, unknown> {
   const commitRequired =
-    pack.requireVerification && (role.id === "verifier" || role.id === "integrator");
+    pack.requireVerification &&
+    (role.id === "verifier" ||
+      role.id === "integrator" ||
+      Object.values(pack.boards.item.phases).some(
+        (phase) => phase.role === role.id && phase.condition,
+      ));
   const criteria =
     role.id === "verifier" ? item.acceptanceCriteria : item.acceptanceCriteria.slice(0, 1);
   return {
@@ -2735,6 +3044,7 @@ function requestFingerprint(input: StartKitchenInput): string {
         mode: input.mode,
         thinking: input.thinking,
         packId: input.packId,
+        workflowId: input.workflowId,
         acceptanceCriteria: input.acceptanceCriteria,
         workflowMode: input.workflowMode ?? "fixed",
         missionMode: input.missionMode,
@@ -2892,4 +3202,49 @@ function assertBrowserEvidence(
     )
   )
     throw new Error("Configured browser evidence is required for the current verified candidate");
+}
+
+function workflowCommunication(state: TeamState, role: Role): string[] {
+  const lines: string[] = [];
+  lines.push(
+    "",
+    "## Communication routes",
+    JSON.stringify(
+      state.team.workflowSnapshot?.autonomy ?? {
+        architecture: "human",
+        requirements: "human",
+        irreversibleActions: "human",
+        finalAcceptance: "human",
+      },
+    ),
+    JSON.stringify(
+      (role as WorkflowDefinition["roles"][string]).communication ?? {
+        clarification: "human",
+        investigation: "human",
+      },
+    ),
+    "Clarification to head-chef uses report.needs.kind=head-chef; human decisions use human. Additional work must use actual workRequests and the declared work-request tool route. Host tool access remains controlled by the host/provider.",
+  );
+  return lines;
+}
+
+function workflowExecutionMode(
+  definition: WorkflowDefinition | undefined,
+  pack: WorkflowPack,
+): "single" | "team" {
+  return definition?.basePackId === "kitchen-single" || pack.id === "kitchen-single"
+    ? "single"
+    : "team";
+}
+
+function mergeWorkflowProfiles(
+  base: Record<string, RoleProfileOverride> | undefined,
+  overrides: Record<string, RoleProfileOverride> | undefined,
+): Record<string, RoleProfileOverride> {
+  return Object.fromEntries(
+    [...new Set([...Object.keys(base ?? {}), ...Object.keys(overrides ?? {})])].map((id) => [
+      id,
+      { ...base?.[id], ...overrides?.[id] },
+    ]),
+  );
 }

@@ -741,7 +741,7 @@ export function applyReport(
   const goesBack = firstEntry(nextPhase) !== -1 && firstEntry(nextPhase) < firstEntry(item.phase);
   if (goesBack) {
     item.returns += 1;
-    if (item.returns > pack.maxReturns) {
+    if (item.returns > (phaseOf(pack, item).maxReturns ?? pack.maxReturns)) {
       blockForBoss(
         state,
         pack,

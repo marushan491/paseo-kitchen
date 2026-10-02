@@ -1,3 +1,4 @@
+import type { FileCondition } from "../shared/workflow-contracts.js";
 // Portions adapted from mastra-ai/mastra mastracode/factory, Apache-2.0. Modified for Agent Factory.
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -8,6 +9,9 @@ import type { WorkItem } from "./types.js";
 export type PhaseKind = "resting" | "working" | "terminal";
 
 export interface Phase {
+  condition?: FileCondition;
+  skipTo?: string;
+  maxReturns?: number;
   title: string;
   kind: PhaseKind;
 

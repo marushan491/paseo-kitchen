@@ -1,3 +1,6 @@
+import { applyWorkflowDesign } from "./workflow-design.js";
+import { definitionFromPack, packFromSnapshot } from "./workflow-definitions.js";
+import { workflowHead } from "./workflow-runtime.js";
 import { factorySettings } from "../shared/preferences.js";
 import { workflowOf } from "./workflow-metadata.js";
 import { workflowConnections, roleTemplate } from "../shared/role-builder.js";
@@ -652,6 +655,126 @@ describe("Plugin recovery and controls", () => {
     );
     await svc.shutdown();
   });
+
+  it.each(["auth/login.ts", "README.md"])(
+    "runs the saved conditional workflow against actual changed file %s",
+    async (changedFile) => {
+      const source = join(root, "source");
+      await mkdir(source);
+      const git = promisify(execFile);
+      await git("git", ["init", source]);
+      await git("git", ["-C", source, "config", "user.name", "Workflow fixture"]);
+      await git("git", ["-C", source, "config", "user.email", "fixture@example.invalid"]);
+      await writeFile(join(source, "README.md"), "Initial");
+      await git("git", ["-C", source, "add", "README.md"]);
+      await git("git", ["-C", source, "commit", "-m", "Initial"]);
+      const host = fakeHost(source),
+        create = host.options.controller.create;
+      host.options.controller.create = async (input) => {
+        const result = await create(input),
+          record = await host.options.controller.get(result.id);
+        if (input.worktree) {
+          await mkdir(join(source, ".worktrees"), { recursive: true });
+          await git("git", ["-C", source, "worktree", "add", "--detach", record!.cwd, "HEAD"]);
+        }
+        return result;
+      };
+      const svc = new TeamService({ ...host.options, storageRoot: root });
+      const definition = await svc.workflows.save(
+        applyWorkflowDesign(
+          definitionFromPack(kitchenPack, "secure-team"),
+          "security",
+          "Review authentication changes",
+        ),
+        0,
+      );
+      const started = await svc.startTeam({
+        bossAgentId: "boss",
+        title: "Workflow",
+        objective: "Implement safely",
+        workflowSnapshot: definition,
+      });
+      await svc.dispatchAll();
+      const po = host.agentFor("po");
+      await svc.plan(po.id, [
+        {
+          key: "A",
+          title: "Implementation",
+          objective: "Change one file",
+          acceptanceCriteria: ["works"],
+        },
+      ]);
+      await svc.report(po.id, { outcome: "planned", summary: "One item" });
+      await svc.dispatchAll();
+      const developer = host.agentFor("developer");
+      if (changedFile.includes("/")) await mkdir(join(developer.cwd, "auth"));
+      await writeFile(join(developer.cwd, changedFile), "Implemented");
+      await git("git", ["-C", developer.cwd, "add", changedFile]);
+      await git("git", ["-C", developer.cwd, "commit", "-m", "Implement"]);
+      await svc.report(developer.id, { outcome: "done", summary: "Implementation committed" });
+      await svc.dispatchAll();
+      await svc.report(host.agentFor("reviewer").id, { outcome: "approve", summary: "Reviewed" });
+      await svc.dispatchAll();
+      const state = (await svc.status(started.team.id)).state,
+        item = itemByKey(state, "A");
+      expect(state.team.workflowSnapshot!.revision).toBe(1);
+      expect(item.pack.workflowCondition).toMatchObject({
+        files: [changedFile],
+        candidateCommit: await workflowHead(developer.cwd),
+        matches: changedFile.startsWith("auth/"),
+      });
+      if (changedFile.startsWith("auth/")) {
+        expect(host.agentFor("security-reviewer")).toBeDefined();
+        expect(item.phase).toBe("security-review");
+        const security = host.agentFor("security-reviewer");
+        await svc.report(security.id, {
+          outcome: "pass",
+          summary: "Clarification needed",
+          needs: {
+            kind: "head-chef",
+            category: "clarification",
+            text: "May I use the existing authentication contract?",
+          },
+        });
+        const blocked = (await svc.status(started.team.id)).state.items[item.id];
+        const pending = blocked.pack.headChefQuestion as {
+          requestId: string;
+          workItemId: string;
+          revision: number;
+        };
+        expect(blocked.phase).toBe("blocked");
+        expect(host.prompts.at(-1)!.agentId).toBe("boss");
+        const answer = {
+          outcome: "head-chef-answer",
+          summary: JSON.stringify({
+            ...pending,
+            answer: "Use the existing contract within the declared goal.",
+          }),
+        };
+        expect(await svc.acceptHeadChefAnswer("foreign-agent", answer)).toBe(false);
+        expect(await svc.acceptHeadChefAnswer("boss", answer)).toBe(true);
+        await svc.dispatchAll();
+        expect((await svc.status(started.team.id)).state.items[item.id].phase).toBe(
+          "security-review",
+        );
+        expect(host.prompts.filter((prompt) => prompt.agentId === security.id)).toHaveLength(2);
+        await expect(svc.acceptHeadChefAnswer("boss", answer)).rejects.toThrow("stale");
+      } else {
+        expect(host.agentFor("security-reviewer")).toBeUndefined();
+        expect(host.agentFor("verifier")).toBeDefined();
+        expect(item.phase).toBe("verify");
+      }
+      const changed = applyWorkflowDesign(definition, "database", "Check migrations");
+      await svc.workflows.save(changed, 1);
+      expect((await svc.status(started.team.id)).state.team.workflowSnapshot!.revision).toBe(1);
+      expect(
+        packFromSnapshot((await svc.status(started.team.id)).state.team.workflowSnapshot!).roles[
+          "database-reviewer"
+        ],
+      ).toBeUndefined();
+      await svc.shutdown();
+    },
+  );
 
   it("respects the configured concurrency slot", async () => {
     const host = fakeHost();
