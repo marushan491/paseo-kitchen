@@ -71,6 +71,28 @@ export function registerFactoryClient(
         onSelect: ({ openScreen }) => openScreen({ screenId: "factory" }),
       }),
     );
+  } else if (
+    typeof client.addSurface === "function" &&
+    typeof client.addSidebarItem === "function"
+  ) {
+    cleanup.push(client.addSurface("factory", components.Factory));
+    cleanup.push(
+      client.addSidebarItem({
+        id: "factory",
+        title: "Kitchen",
+        icon: "Workflow",
+        surface: "factory",
+      }),
+    );
+    cleanup.push(
+      client.addCommandCenterItem({
+        id: "open-factory",
+        title: "Open Kitchen overview",
+        icon: "Workflow",
+        context: "global",
+        onSelect: ({ openSurface }) => openSurface("factory"),
+      }),
+    );
   }
   return () => {
     for (const remove of cleanup.toReversed()) remove();
