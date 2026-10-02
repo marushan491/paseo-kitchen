@@ -1,6 +1,17 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { expect, it, vi } from "vitest";
-import { registerFactoryClient } from "./registration.js";
+import { openFactorySurface, registerFactoryClient } from "./registration.js";
+
+it("opens the same native mission on both supported navigation APIs", () => {
+  const params = { teamId: "team_native", section: "Missions" };
+  const openSurface = vi.fn();
+  const openScreen = vi.fn();
+  openFactorySurface({ openSurface, openScreen } as unknown as PluginClientContext, params);
+  expect(openSurface).toHaveBeenCalledWith("factory", { params });
+  expect(openScreen).not.toHaveBeenCalled();
+  openFactorySurface({ openScreen } as unknown as PluginClientContext, params);
+  expect(openScreen).toHaveBeenCalledWith({ screenId: "factory", params });
+});
 
 it("registers a global Kitchen surface on the actual PandaOS 0.9 client API", () => {
   const cleanup = vi.fn();

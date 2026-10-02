@@ -5,6 +5,21 @@ import type {
 } from "@getpaseo/plugin/client";
 import type { FunctionComponent } from "react";
 
+export function openFactorySurface(
+  client: PluginClientContext,
+  params: Readonly<Record<string, string>>,
+) {
+  if ("openSurface" in client && typeof client.openSurface === "function") {
+    const open = client.openSurface as (
+      id: string,
+      options: { params: Readonly<Record<string, string>> },
+    ) => void;
+    open("factory", { params });
+    return;
+  }
+  client.openScreen({ screenId: "factory", params });
+}
+
 export function registerFactoryClient(
   client: PluginClientContext,
   components: {

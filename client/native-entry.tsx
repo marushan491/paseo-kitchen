@@ -20,6 +20,7 @@ import { factoryStatus } from "../shared/factory-contracts.js";
 import { missionSummary } from "../shared/mission-stage.js";
 import { Action, useFactoryStyles } from "./ui.js";
 import { useMissionAgents } from "./mission-agents.js";
+import { openFactorySurface } from "./registration.js";
 
 interface NativeContribution {
   id: string;
@@ -51,16 +52,12 @@ export function registerNativeExecution(client: PluginClientContext) {
       placeholder: "Message Kitchen…",
       loadPresets: (input) => client.rpc(factoryNativePresets, input),
       start: (input) => client.rpc(factoryNativeStart, input),
-      onManage: () => client.openScreen({ screenId: "factory", params: { section: "Team" } }),
+      onManage: () => openFactorySurface(client, { section: "Team" }),
     });
   }
   function Mission(props: PluginTimelineItemProps<NativeMission>) {
     const open = useCallback(
-      () =>
-        client.openScreen({
-          screenId: "factory",
-          params: { teamId: props.item.data.teamId, section: "Missions" },
-        }),
+      () => openFactorySurface(client, { teamId: props.item.data.teamId, section: "Missions" }),
       [props.item.data.teamId],
     );
     return <KitchenMissionCard {...props} onOpen={open} />;
@@ -112,7 +109,7 @@ function KitchenMissionCard(props: PluginTimelineItemProps<NativeMission> & { on
         <Action
           theme={props.theme}
           title={
-            state?.items[state.team.rootItemId]?.phase === "ready_for_human"
+            state?.items[state.team.rootItemId]?.phase === "ready-for-human"
               ? "Review result"
               : "Open Kitchen"
           }
