@@ -6,7 +6,7 @@ The hierarchy is inspired by [Agent Crew](https://paseo.cafe/plugins/agent-crew/
 
 ## Install and configure
 
-The plugin-only repository is [marushan491/paseo-kitchen](https://github.com/marushan491/paseo-kitchen). Clone it using an account with access to that private repository. The Paseo fork is a testbed; installing the plugin does not require that fork.
+The plugin-only repository is [marushan491/paseo-kitchen](https://github.com/marushan491/paseo-kitchen). Clone it directly; the plugin is open source under Apache-2.0. The Paseo fork is a testbed; installing the plugin does not require that fork.
 
 Install the cloned directory on the target host:
 
@@ -81,6 +81,8 @@ A worker finishes with exactly one `factory-report` JSON fence containing `repor
 Reports are validated against the active binding and phase. Verification checks the actual checkout rather than accepting a claimed commit hash. Reports and plans are committed atomically; stale, duplicate or invalid reports cannot silently advance the run.
 
 ## Host boundaries
+
+Command Center contributions require a current host context: open a workspace or a plugin page first. The host does not expose plugin commands on the unscoped `/open-project` page. Kitchen’s Sidebar entry remains available there.
 
 The manifest targets Paseo/PandaOS 0.9.1 through 0.11.x. Newer hosts provide eager plugin API and storage; older hosts need explicit storage and host configuration. Configured older hosts bootstrap their own public SDK connection so persisted schedules resume without opening the UI. For a password-protected older host, configure its local Daemon home and preserve its existing `PASEO_PASSWORD` environment source; passwords are never stored in plugin settings. The plugin remains optional and uses its own `agent-factory.*` labels and state. Existing built-in PandaOS jobs continue in their existing coordinator; this plugin does not migrate those jobs.
 
