@@ -1,0 +1,45 @@
+{
+  "name": "paseo-agent-factory",
+  "version": "0.2.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "files": [
+    "paseo-plugin.json",
+    "index.server.ts",
+    "index.client.tsx",
+    "client",
+    "server",
+    "shared",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "vitest.config.ts",
+    "tsconfig.json"
+  ],
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsgo -p tsconfig.json --noEmit",
+    "test": "vitest run --bail=1",
+    "lint": "oxlint .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check ."
+  },
+  "devDependencies": {
+    "@getpaseo/client": "0.11.0-beta.3",
+    "@getpaseo/plugin": "0.11.0-beta.3",
+    "@getpaseo/protocol": "0.11.0-beta.3",
+    "@tanstack/react-query": "^5.90.0",
+    "@types/node": "^20.9.0",
+    "@types/react": "^19.0.0",
+    "@typescript/native-preview": "7.0.0-dev.20260423.1",
+    "oxfmt": "0.46.0",
+    "oxlint": "1.61.0",
+    "pino": "^9.14.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-web": "^0.21.0",
+    "vitest": "4.1.7",
+    "zod": "^4.4.3"
+  }
+}

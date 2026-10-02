@@ -1,0 +1,7 @@
+{
+  "id": "agent-factory",
+  "requirements": {
+    "paseo": ">=0.9.1 <0.12.0"
+  },
+  "build": [["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund"]]
+}

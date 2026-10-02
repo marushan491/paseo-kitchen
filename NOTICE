@@ -1,0 +1,14 @@
+Agent Factory
+Copyright 2026 Marushan Anpalahan
+
+Derived from PandaOS (https://github.com/marushan49/pandaos), a modified fork of
+Paseo (https://github.com/getpaseo/paseo), Copyright (c) 2025-present Mohamed Boudra.
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Parts of the team runtime (board phase model, revisioned work items, run bindings,
+decision outbox, deterministic health findings) are adapted from Mastra
+(https://github.com/mastra-ai/mastra, mastracode/factory), Copyright (c) 2025 Kepler
+Software, Inc., licensed under the Apache License 2.0. Modified for PandaOS and
+adapted to public Paseo plugin APIs.
+
+This plugin is not endorsed by the Paseo or Mastra authors.

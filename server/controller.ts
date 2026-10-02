@@ -1,0 +1,201 @@
+import type { z } from "zod";
+import type { FactoryCompletionSchema } from "../shared/factory-contracts.js";
+import { parseFactoryCompletion } from "./completion.js";
+import { realpath } from "node:fs/promises";
+import { createHostControl } from "./host-control.js";
+import type { HostControlOptions } from "./host-control.js";
+import type { PaseoAgentCreateOptions } from "@getpaseo/client";
+import type { PaseoApi, PaseoAgent } from "@getpaseo/client";
+export interface FactoryAgent {
+  id: string;
+  title?: string | null;
+  workspaceId?: string | null;
+  parentAgentId?: string | null;
+  usageTotals?: { inputTokens: number; outputTokens: number };
+  provider: string;
+  cwd: string;
+  labels: Record<string, string>;
+  archivedAt?: string | null;
+  runtimeInfo?: {
+    model?: string | null;
+    modeId?: string | null;
+    thinkingOptionId?: string | null;
+  };
+  model?: string | null;
+  currentModeId?: string | null;
+  thinkingOptionId?: string | null;
+  updatedAt?: string;
+  running?: boolean;
+}
+export interface FactoryCreate {
+  provider: string;
+  title: string;
+  cwd: string;
+  initialPrompt?: string;
+  thinking?: string;
+  mode?: string;
+  labels: Record<string, string>;
+  parentAgentId?: string;
+  workspaceId?: string;
+  decisionId: string;
+  worktree?: { worktreeName: string; branchName: string; baseBranch: string };
+}
+export interface FactoryController {
+  get(id: string): Promise<FactoryAgent | null>;
+  completion?(id: string): Promise<z.infer<typeof FactoryCompletionSchema> | null>;
+  list(): Promise<FactoryAgent[]>;
+  isRunning(id: string): Promise<boolean>;
+  create(input: FactoryCreate): Promise<{ id: string }>;
+  send(id: string, text: string, behavior?: "steer"): Promise<void>;
+  cancel(id: string): Promise<void>;
+  update(id: string, changes: { title?: string; labels?: Record<string, string> }): Promise<void>;
+  detach(id: string): Promise<void>;
+  moveToWorkspace(id: string, workspaceId: string): Promise<void>;
+  resolveWorkspace(
+    id: string,
+  ): Promise<{ id: string; cwd: string; archivedAt?: string | null } | null>;
+  findWorkspaceForCwd(
+    cwd: string,
+  ): Promise<{ id: string; cwd: string; archivedAt?: string | null } | null>;
+  validateProvider(input: { provider: string; model?: string; cwd: string }): Promise<void>;
+}
+export interface FactoryLogger {
+  child(context: Record<string, unknown>): FactoryLogger;
+  error(context: Record<string, unknown>, message: string): void;
+  info(context: Record<string, unknown>, message: string): void;
+  warn(context: Record<string, unknown>, message: string): void;
+}
+export const factoryLogger: FactoryLogger = {
+  child: () => factoryLogger,
+  error: (context, message) => console.error(message, context),
+  info: (context, message) => console.info(message, context),
+  warn: (context, message) => console.warn(message, context),
+};
+function snapshot(agent: PaseoAgent): FactoryAgent {
+  return {
+    ...agent,
+    parentAgentId: agent.labels?.["paseo.parent-agent-id"],
+    running: agent.status === "running" || Boolean(agent.activeTurn),
+  };
+}
+export function sdkController(
+  paseo: PaseoApi,
+  hostOptions: HostControlOptions = {},
+): FactoryController {
+  const host = createHostControl(paseo, hostOptions);
+  const workspace = async (id: string) => {
+    const value = await paseo.workspaces.ref(id).refresh();
+    return value
+      ? {
+          id: value.id,
+          cwd: value.workspaceDirectory ?? value.projectRootPath,
+          archivedAt: value.archivingAt,
+        }
+      : null;
+  };
+  return {
+    cancel: host.cancel,
+    update: host.update,
+    moveToWorkspace: host.moveToWorkspace,
+    async detach(id) {
+      await paseo.agents.ref(id).detach();
+    },
+    resolveWorkspace: workspace,
+    async findWorkspaceForCwd(cwd) {
+      let cursor: string | undefined;
+      const directory = await realpath(cwd);
+      do {
+        const result = await paseo.workspaces.list({ page: { limit: 200, cursor } });
+        for (const value of result.entries) {
+          if (value.archivingAt) continue;
+          const path = value.workspaceDirectory ?? value.projectRootPath;
+          if ((await realpath(path).catch(() => null)) === directory)
+            return { id: value.id, cwd: path, archivedAt: null };
+        }
+        cursor = result.pageInfo.nextCursor ?? undefined;
+      } while (cursor);
+      return null;
+    },
+    async validateProvider(input) {
+      await host.preflight();
+      const separator = input.provider.indexOf("/");
+      const provider = separator < 0 ? input.provider : input.provider.slice(0, separator);
+      const model =
+        input.model ?? (separator < 0 ? undefined : input.provider.slice(separator + 1));
+      const result = await paseo.providers.listModels(provider, { cwd: input.cwd });
+      if (result.error) throw new Error(result.error);
+      if (
+        !result.models?.some(
+          (entry) => entry.isSelectable !== false && (model ? entry.id === model : entry.isDefault),
+        )
+      )
+        throw new Error(
+          `Kitchen provider ${provider} has no selectable ${model ?? "default model"}`,
+        );
+    },
+    async get(id) {
+      const result = await paseo.agents.ref(id).refresh();
+      return result ? snapshot(result.agent) : null;
+    },
+    async completion(id) {
+      const result = await paseo.agents.ref(id).timeline.refetch({ direction: "tail", limit: 200 });
+      if (result.error) throw new Error(result.error);
+      return parseFactoryCompletion(result.entries.map((entry) => entry.item));
+    },
+    async list() {
+      const agents: FactoryAgent[] = [];
+      let cursor: string | undefined;
+      do {
+        const result = await paseo.agents.list({ page: { limit: 200, cursor } });
+        agents.push(...result.entries.map((entry) => snapshot(entry.agent)));
+        cursor = result.pageInfo.nextCursor ?? undefined;
+      } while (cursor);
+      return agents;
+    },
+    async isRunning(id) {
+      const result = await paseo.agents.ref(id).refresh();
+      return Boolean(result && (result.agent.status === "running" || result.agent.activeTurn));
+    },
+    async create(input) {
+      let provider = input.provider;
+      if (!provider.includes("/")) {
+        const catalog = await paseo.providers.listModels(provider, { cwd: input.cwd });
+        if (catalog.error) throw new Error(catalog.error);
+        const model = catalog.models?.find(
+          (entry) => entry.isDefault && entry.isSelectable !== false,
+        );
+        if (!model)
+          throw new Error(
+            `Select an explicit model for Factory provider ${provider}; no default was advertised`,
+          );
+        provider = `${provider}/${model.id}`;
+      }
+      const options: PaseoAgentCreateOptions = {
+        idempotencyKey: input.decisionId,
+        config: { provider, thinkingOptionId: input.thinking, modeId: input.mode },
+        cwd: input.cwd,
+        parent: input.parentAgentId,
+        title: input.title,
+        labels: input.labels,
+        prompt: input.initialPrompt,
+        worktree: input.worktree
+          ? {
+              mode: "branch-off",
+              newBranch: input.worktree.branchName,
+              base: input.worktree.baseBranch,
+            }
+          : undefined,
+      };
+      let placement = input.workspaceId ? paseo.workspaces.ref(input.workspaceId) : null;
+      if (!placement && input.parentAgentId && !input.worktree)
+        placement = await paseo.workspaces.open(input.cwd);
+      const created = placement
+        ? await placement.agents.create(options)
+        : await paseo.agents.create(options);
+      return { id: created.id };
+    },
+    async send(id, text, behavior) {
+      await paseo.agents.ref(id).send(text, { activeTurnBehavior: behavior });
+    },
+  };
+}
