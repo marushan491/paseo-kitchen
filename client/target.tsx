@@ -61,7 +61,7 @@ export function useKitchenTarget(
       source
         ? {
             provider: source.provider,
-            model: source.runtimeInfo?.model || undefined,
+            model: source.model || source.runtimeInfo?.model || undefined,
             mode: source.currentModeId || source.runtimeInfo?.modeId || undefined,
             thinking: source.thinkingOptionId || source.runtimeInfo?.thinkingOptionId || undefined,
             sourceAgentId: source.id,

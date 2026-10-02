@@ -7,7 +7,7 @@ import {
 } from "@getpaseo/plugin/client";
 import type { z } from "zod";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { KeyboardAvoidingView, ScrollView, Text, View } from "react-native";
 import {
   factoryList,
   factoryKitchenStart,
@@ -19,7 +19,7 @@ import {
 } from "../shared/factory-contracts.js";
 import { Action, Field, Disclosure, useFactoryStyles } from "./ui.js";
 import { listFactoryAgents } from "./agents.js";
-import { parseCriteria } from "./kitchen-model.js";
+import { missionCriteria, missionName } from "./kitchen-model.js";
 import { KitchenSchedules } from "./schedules.js";
 import { TargetSelection, useKitchenTarget } from "./target.js";
 import { RoleAssignments } from "./workflows.js";
@@ -50,13 +50,14 @@ type Props = PluginSurfaceProps &
   Partial<Pick<PluginAgentPanelProps, "workspaceId" | "agentId">> & {
     projectPath?: string;
     onNew?(): void;
+    onCancel?(): void;
     createNew?: boolean;
     selectedTeamId?: string;
     onCreated?(teamId: string): void;
   };
 
 export function Factory(props: Props) {
-  const { theme, workspaceId, agentId } = props;
+  const { theme, workspaceId, agentId, onCancel } = props;
   const styles = useFactoryStyles(props);
   const paseo = usePaseo();
   const list = useRpc(factoryList);
@@ -86,6 +87,9 @@ export function Factory(props: Props) {
   const [criteria, setCriteria] = useState("");
   const [cwd, setCwd] = useState(props.projectPath || "");
   const [source, setSource] = useState(agentId || "");
+  useEffect(() => {
+    if (props.projectPath) setCwd(props.projectPath);
+  }, [props.projectPath]);
   useEffect(() => {
     if (!agentId || !workspaceId || !props.createNew) return;
     let disposed = false;
@@ -164,9 +168,9 @@ export function Factory(props: Props) {
   const request = useMemo<Omit<StartKitchenInput, "idempotencyKey">>(
     () => ({
       ...targetSelection.target,
-      title: title.trim(),
+      title: missionName(title, objective),
       objective: objective.trim(),
-      acceptanceCriteria: parseCriteria(criteria),
+      acceptanceCriteria: missionCriteria(objective, criteria),
       kind,
       workflowMode,
       missionMode,
@@ -199,9 +203,7 @@ export function Factory(props: Props) {
   const create = useMutation({
     mutationFn: () => {
       if (!validRequest)
-        throw new Error(
-          "Provide a goal, criteria and an available source session or provider/model/project.",
-        );
+        throw new Error("Add a goal and choose a project with an available agent model.");
       const input = request;
       const fingerprint = JSON.stringify(input);
       if (attempt.current?.fingerprint !== fingerprint)
@@ -231,6 +233,10 @@ export function Factory(props: Props) {
     setObjective("");
     setCriteria("");
   }, [create]);
+  const cancelMission = useCallback(() => {
+    setCreating(false);
+    onCancel?.();
+  }, [onCancel]);
   const refresh = useCallback(() => {
     void cache.invalidateQueries({ queryKey: ["factory"] });
   }, [cache]);
@@ -267,27 +273,23 @@ export function Factory(props: Props) {
     Boolean,
   );
   return (
-    <View style={styles.screen}>
-      <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-        <View style={styles.row}>
-          <Text style={styles.title}>Missions</Text>
-          <Action theme={theme} title="Refresh" value="refresh" onAction={refresh} />
-          <Action
-            theme={theme}
-            title={schedulesLabel(showSchedules)}
-            value="triggers"
-            onAction={toggleSchedules}
-          />
-        </View>
-        <Text style={styles.muted}>
-          Your Head Chef coordinates the work. Open a mission to answer questions, inspect agents or
-          review the verified result.
-        </Text>
-        {error ? (
-          <Text accessibilityLiveRegion="polite" style={styles.danger}>
-            {String(error)}
-          </Text>
-        ) : null}
+    <KeyboardAvoidingView
+      behavior={props.layout.platform === "ios" ? "padding" : "height"}
+      style={styles.screen}
+    >
+      <ScrollView
+        style={styles.screen}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.content}
+      >
+        <MissionHeading
+          {...props}
+          creating={creating}
+          showSchedules={showSchedules}
+          onRefresh={refresh}
+          onSchedules={toggleSchedules}
+          error={error}
+        />
         <View style={creating ? styles.stack : styles.columns}>
           {canShowContent ? (
             <View style={styles.sidebar}>
@@ -312,7 +314,7 @@ export function Factory(props: Props) {
                   {props.onNew ? (
                     <Action
                       theme={theme}
-                      title="Create a mission"
+                      title="Start mission"
                       variant="primary"
                       value="new"
                       onAction={props.onNew}
@@ -388,9 +390,10 @@ export function Factory(props: Props) {
           ready={validRequest}
           pending={create.isPending}
           onStart={startKitchen}
+          onCancel={cancelMission}
         />
       ) : null}
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -477,75 +480,90 @@ function KitchenStartForm(
   );
   return (
     <View style={styles.stack}>
-      <View style={styles.card}>
-        <Text style={styles.heading}>What should Kitchen build?</Text>
-        <Text style={styles.muted}>
-          A feature, a backlog or a complete product. Describe the outcome; Kitchen works through
-          the remaining tasks.
-        </Text>
+      <View style={styles.stack}>
         <Field
           theme={theme}
-          label="Mission name"
-          value={title}
-          onChange={onTitle}
-          placeholder="Build customer onboarding"
-        />
-        <Field
-          theme={theme}
-          label="Goal"
+          label="What should be true when Kitchen is done?"
           value={objective}
           onChange={onObjective}
-          placeholder="What should work when Kitchen is finished?"
+          placeholder="For example: Customers can sign in and keep their session after reopening the app."
           multiline
+          autoFocus
         />
-        <Field
+        <Text style={styles.muted}>
+          Kitchen plans the work, assigns agents and verifies the result. It asks you when a
+          decision is needed.
+        </Text>
+        <Disclosure
           theme={theme}
-          label="Done when · one result per line"
-          value={criteria}
-          onChange={onCriteria}
-          placeholder="Customers can create an account
-The onboarding flow passes its tests"
-          multiline
-        />
+          title="Define success"
+          summary={
+            criteria.trim()
+              ? "Custom acceptance criteria"
+              : "Optional. Kitchen must verify your goal before you accept the result."
+          }
+        >
+          <Field
+            theme={theme}
+            label="Observable results, one per line"
+            value={criteria}
+            onChange={onCriteria}
+            multiline
+            placeholder="Login survives an app restart
+Expired sessions return to sign-in"
+          />
+        </Disclosure>
       </View>
-      <View style={styles.card}>
-        <Text style={styles.heading}>Where should the agents work?</Text>
+      {!props.projectPath ? (
         <TargetSelection
           {...props}
           selection={targetSelection}
           hasSource={Boolean(targetSelection.target.sourceAgentId)}
           onProject={onProject}
         />
-        <Disclosure
-          theme={theme}
-          title="Source session & custom directory"
-          summary={
-            source
-              ? "Inheriting this session's agent settings"
-              : "Start directly in the selected project"
-          }
-        >
-          <Choice
-            {...props}
-            label="Source session"
-            value={source}
-            onChange={onSource}
-            allowEmpty
-            emptyTitle="No source session"
-            options={sourceOptions}
-          />
-          <Field
-            theme={theme}
-            label="Project directory"
-            value={cwd}
-            onChange={onCwd}
-            placeholder="/absolute/path/to/project"
-          />
-          {loadingAgents ? <Text style={styles.muted}>Loading sessions…</Text> : null}
-        </Disclosure>
-      </View>
+      ) : null}
       <View style={styles.card}>
-        <Text style={styles.heading}>How should Kitchen work?</Text>
+        <Text style={styles.heading}>Conversation context</Text>
+        <View style={styles.row}>
+          {props.agentId ? (
+            <Action
+              theme={theme}
+              title="Current conversation"
+              selected={source === props.agentId}
+              value={props.agentId}
+              onAction={onSource}
+              variant="secondary"
+            />
+          ) : null}
+          <Action
+            theme={theme}
+            title="No conversation"
+            selected={!source}
+            value=""
+            onAction={onSource}
+            variant="secondary"
+          />
+        </View>
+        <Choice
+          {...props}
+          label="Choose another conversation"
+          value={source}
+          onChange={onSource}
+          allowEmpty
+          emptyTitle="Start from the goal"
+          options={sourceOptions}
+        />
+        {loadingAgents ? <Text style={styles.muted}>Loading conversations…</Text> : null}
+      </View>
+      <Disclosure
+        theme={theme}
+        title="How should it run?"
+        summary={
+          workflowMode === "self-organizing"
+            ? "Continue until the goal is verified. Standard team."
+            : "Follow the initial plan. Standard team."
+        }
+      >
         <View style={styles.row}>
           <Action
             theme={theme}
@@ -564,16 +582,15 @@ The onboarding flow passes its tests"
             variant="secondary"
           />
         </View>
-        <Text style={styles.text}>
+        <Text style={styles.muted}>
           {workflowMode === "self-organizing"
-            ? "The team can discover and request more scoped work, then continue through review and verification. It asks you when a decision is missing."
-            : "Kitchen plans the initial tasks and follows that plan. Additional work requests are disabled."}
+            ? "Kitchen can request and dispatch additional scoped work when verification finds something missing."
+            : "Kitchen plans the initial tasks. Additional work requests are disabled."}
         </Text>
-        <Text style={styles.muted}>Plan → Build → Review → Verify → Your acceptance</Text>
         <Disclosure
           theme={theme}
-          title="Roles & workflow"
-          summary="Built-in roles are ready. Add your own instructions, skills or saved workflows."
+          title="Customize the team"
+          summary="Plan, Build, Review, Verify, Integrate and Final verification are already configured."
         >
           <RoleAssignments
             {...props}
@@ -582,12 +599,34 @@ The onboarding flow passes its tests"
             onChange={props.onRoleProfiles}
           />
         </Disclosure>
-      </View>
+      </Disclosure>
       <Disclosure
         theme={theme}
         title="Advanced options"
-        summary="Automatic team size · optional budgets · no automatic publishing"
+        summary="Models, roles, workflow packs, budgets and publishing"
       >
+        <Field
+          theme={theme}
+          label="Mission name (optional)"
+          value={title}
+          onChange={onTitle}
+          placeholder={missionName("", objective) || "Name is taken from the goal"}
+        />
+        {props.projectPath ? (
+          <TargetSelection
+            {...props}
+            selection={targetSelection}
+            hasSource={Boolean(targetSelection.target.sourceAgentId)}
+            onProject={onProject}
+          />
+        ) : null}
+        <Field
+          theme={theme}
+          label="Custom project directory"
+          value={cwd}
+          onChange={onCwd}
+          placeholder="/absolute/path/to/project"
+        />
         <Choice
           {...props}
           label="Execution mode"
@@ -630,25 +669,14 @@ The onboarding flow passes its tests"
           />
         </Disclosure>
       </Disclosure>
-      <View style={styles.card}>
-        <Text style={styles.heading}>Ready to start</Text>
-        <Text style={styles.muted}>
-          {title.trim() ? title.trim() : "Add a mission name"} ·{" "}
-          {targetSelection.target.provider || "Choose an available provider"} ·{" "}
-          {workflowMode === "self-organizing" ? "Goal-driven" : "Fixed plan"}
+      {!validSource ? (
+        <Text accessibilityLiveRegion="polite" style={styles.muted}>
+          Choose a project with an available model. Check any advanced options you changed.
         </Text>
-        {!validSource ? (
-          <Text style={styles.muted}>
-            Choose a project and an available agent model. Check any advanced options you changed.
-          </Text>
-        ) : null}
-        {!parseCriteria(criteria).length ? (
-          <Text style={styles.muted}>Add at least one observable result under Done when.</Text>
-        ) : null}
-        {success ? (
-          <Action theme={theme} title="Prepare another mission" value="new" onAction={onFresh} />
-        ) : null}
-      </View>
+      ) : null}
+      {success ? (
+        <Action theme={theme} title="Prepare another mission" value="new" onAction={onFresh} />
+      ) : null}
     </View>
   );
 }
@@ -721,23 +749,78 @@ function singleCompatiblePack(pack: z.infer<typeof FactoryPackSchema>) {
   return pack.id === "kitchen" || pack.id === "kitchen-single";
 }
 
-function MissionStartFooter(props: Props & { ready: boolean; pending: boolean; onStart(): void }) {
+function MissionStartFooter(
+  props: Props & { ready: boolean; pending: boolean; onStart(): void; onCancel(): void },
+) {
   const styles = useFactoryStyles(props);
   return (
     <View style={styles.footer}>
-      <Text style={styles.muted}>
-        {props.ready
-          ? "Ready. Kitchen will plan, build and verify this goal."
-          : "Add a goal, observable results and a project with an available model."}
-      </Text>
-      <Action
-        theme={props.theme}
-        variant="primary"
-        title={props.pending ? "Starting Kitchen…" : "Start Kitchen"}
-        value="start"
-        onAction={props.onStart}
-        disabled={props.pending || !props.ready}
-      />
+      <View style={styles.footerActions}>
+        <Action
+          theme={props.theme}
+          title="Cancel"
+          variant="secondary"
+          value="cancel"
+          onAction={props.onCancel}
+          disabled={props.pending}
+          compact={props.layout.compact}
+        />
+        <Action
+          theme={props.theme}
+          variant="primary"
+          title={props.pending ? "Starting…" : "Start mission"}
+          accessibilityLabel="Start mission"
+          value="start"
+          onAction={props.onStart}
+          disabled={props.pending || !props.ready}
+          compact={props.layout.compact}
+        />
+      </View>
+    </View>
+  );
+}
+
+function MissionHeading(
+  props: Props & {
+    creating: boolean;
+    showSchedules: boolean;
+    error?: unknown;
+    onRefresh(): void;
+    onSchedules(): void;
+  },
+) {
+  const styles = useFactoryStyles(props);
+  return (
+    <View style={styles.stack}>
+      <View style={styles.row}>
+        <Text style={styles.title}>{props.creating ? "Start mission" : "Missions"}</Text>
+        {!props.creating ? (
+          <>
+            <Action
+              theme={props.theme}
+              title="Refresh"
+              value="refresh"
+              onAction={props.onRefresh}
+            />
+            <Action
+              theme={props.theme}
+              title={schedulesLabel(props.showSchedules)}
+              value="schedules"
+              onAction={props.onSchedules}
+            />
+          </>
+        ) : null}
+      </View>
+      {!props.creating ? (
+        <Text style={styles.muted}>
+          Open a mission to answer a question, follow the work or review its verified result.
+        </Text>
+      ) : null}
+      {props.error ? (
+        <Text accessibilityLiveRegion="polite" style={styles.danger}>
+          {String(props.error)}
+        </Text>
+      ) : null}
     </View>
   );
 }

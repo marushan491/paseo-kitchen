@@ -1,7 +1,7 @@
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Text, View } from "react-native";
-import { Action, Field, useFactoryStyles } from "./ui.js";
+import { Action, Field, SurfaceSheet, useFactoryStyles } from "./ui.js";
 
 export interface ChoiceOption {
   id: string;
@@ -14,7 +14,7 @@ export function filterChoices(options: ChoiceOption[], search: string) {
   const matches = options.filter((option) =>
     `${option.title} ${option.id}`.toLocaleLowerCase().includes(query),
   );
-  return { visible: matches.slice(0, 8), count: matches.length };
+  return { visible: matches, count: matches.length };
 }
 
 export function Choice(
@@ -31,14 +31,19 @@ export function Choice(
   const { onChange } = props;
   const [expanded, setExpanded] = useState(false);
   const [search, setSearch] = useState("");
-  const toggle = useCallback(() => setExpanded((value) => !value), []);
+  const trigger = useRef<View>(null);
+  const close = useCallback(() => {
+    setExpanded(false);
+    setSearch("");
+    (trigger.current as unknown as { focus?(): void } | null)?.focus?.();
+  }, []);
+  const toggle = useCallback(() => setExpanded(true), []);
   const choose = useCallback(
     (value: string) => {
       onChange(value);
-      setExpanded(false);
-      setSearch("");
+      close();
     },
-    [onChange],
+    [onChange, close],
   );
   const result = useMemo(() => filterChoices(props.options, search), [props.options, search]);
   const selected = props.options.find((option) => option.id === props.value);
@@ -46,7 +51,7 @@ export function Choice(
   const placeholder = props.allowEmpty ? emptyTitle : `Choose ${props.label.toLocaleLowerCase()}`;
   const title = props.value ? (selected?.title ?? props.value) : placeholder;
   return (
-    <View style={styles.stack}>
+    <View style={styles.fieldGroup}>
       <Text style={styles.muted}>{props.label}</Text>
       <Action
         theme={props.theme}
@@ -56,14 +61,23 @@ export function Choice(
         onAction={toggle}
         variant="secondary"
         selected={expanded}
+        compact={props.layout.compact}
+        trailing="⌄"
+        buttonRef={trigger}
       />
       {expanded ? (
-        <View style={styles.stack}>
+        <SurfaceSheet
+          {...props}
+          title={`Choose ${props.label.toLocaleLowerCase()}`}
+          onClose={close}
+          narrow
+        >
           <Field
             theme={props.theme}
             label={`Search ${props.label.toLocaleLowerCase()}`}
             value={search}
             onChange={setSearch}
+            autoFocus
           />
           {props.allowEmpty ? (
             <Action
@@ -73,6 +87,7 @@ export function Choice(
               value=""
               onAction={choose}
               selected={!props.value}
+              compact={props.layout.compact}
             />
           ) : null}
           {result.visible.map((option) => (
@@ -85,13 +100,11 @@ export function Choice(
               onAction={choose}
               disabled={option.disabled}
               selected={option.id === props.value}
+              compact={props.layout.compact}
             />
           ))}
-          <Text style={styles.muted}>
-            {result.visible.length} of {result.count} matches
-            {result.count > 8 ? " · refine your search" : ""}
-          </Text>
-        </View>
+          {!result.count ? <Text style={styles.muted}>No matching choices.</Text> : null}
+        </SurfaceSheet>
       ) : null}
     </View>
   );

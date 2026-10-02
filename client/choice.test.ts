@@ -4,13 +4,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { Choice, filterChoices } from "./choice.js";
 
-test("a large advertised catalog stays bounded while a model ID remains searchable", () => {
+test("a searchable picker retains every advertised model including choices beyond the first page", () => {
   const options = Array.from({ length: 20 }, (_, index) => ({
     id: `provider/model-${index}`,
     title: `Model ${index}`,
     disabled: index === 19,
   }));
-  expect(filterChoices(options, "")).toMatchObject({ count: 20, visible: options.slice(0, 8) });
+  expect(filterChoices(options, "")).toMatchObject({ count: 20, visible: options });
   expect(filterChoices(options, " MODEL-19 ")).toEqual({ count: 1, visible: [options[19]] });
   expect(filterChoices(options, "not-advertised")).toEqual({ count: 0, visible: [] });
   expect(options).toHaveLength(20);

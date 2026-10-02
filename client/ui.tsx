@@ -1,7 +1,18 @@
 import type { PluginHostProps } from "@getpaseo/plugin/client";
 import { useCallback, useMemo, useId, useState } from "react";
-import type { ReactNode } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import type { ReactNode, Ref } from "react";
+import {
+  KeyboardAvoidingView,
+  Modal,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+  type TextInputProps,
+  useWindowDimensions,
+} from "react-native";
 
 export function Action<T>({
   theme,
@@ -12,6 +23,9 @@ export function Action<T>({
   disabled = false,
   variant = "ghost",
   selected = false,
+  compact,
+  buttonRef,
+  trailing,
 }: {
   theme: PluginHostProps["theme"];
   title: string;
@@ -19,40 +33,53 @@ export function Action<T>({
   value: T;
   onAction(value: T): void;
   disabled?: boolean;
-  variant?: "primary" | "secondary" | "ghost" | "danger";
+  variant?: "primary" | "secondary" | "ghost" | "danger" | "tab";
   selected?: boolean;
+  compact?: boolean;
+  buttonRef?: Ref<View>;
+  trailing?: string;
 }) {
   const nativeId = useId();
+  const { width } = useWindowDimensions();
+  const touchControls = compact ?? width < 768;
   const press = useCallback(() => onAction(value), [onAction, value]);
   const accessibilityState = useMemo(() => ({ selected, disabled }), [selected, disabled]);
   const styles = useMemo(() => {
     let borderColor = theme.colors.border;
     if (variant === "ghost") borderColor = "transparent";
     if (selected) borderColor = theme.colors.accent;
+    if (variant === "tab" && !selected) borderColor = "transparent";
     let backgroundColor = "transparent";
     if (selected) backgroundColor = theme.colors.surface1;
     if (variant === "primary") backgroundColor = theme.colors.accent;
     let color = theme.colors.foreground;
     if (variant === "danger") color = theme.colors.statusDanger;
     if (variant === "primary") color = theme.colors.accentForeground;
+    if (variant === "tab" && selected) color = theme.colors.accent;
     return {
       button: {
         paddingVertical: 8,
         paddingHorizontal: 14,
-        borderRadius: 8,
-        borderWidth: 1,
+        borderRadius: variant === "tab" ? 0 : 8,
+        borderWidth: variant === "tab" ? 0 : 1,
+        borderBottomWidth: variant === "tab" ? 2 : 1,
         borderColor,
         backgroundColor,
-        minHeight: 40,
+        minHeight: touchControls ? 48 : 44,
+        justifyContent: "center" as const,
+        flexDirection: "row" as const,
+        alignItems: "center" as const,
+        gap: 10,
         opacity: disabled ? 0.45 : 1,
       },
-      text: { color, fontWeight: "600" as const },
+      text: { color, fontWeight: "600" as const, fontSize: 14, flexShrink: 1 },
     };
-  }, [theme, disabled, variant, selected]);
+  }, [theme, disabled, variant, selected, touchControls]);
   return (
     <Pressable
       nativeID={nativeId}
-      accessibilityRole="button"
+      ref={buttonRef}
+      accessibilityRole={variant === "tab" ? "tab" : "button"}
       accessibilityLabel={accessibilityLabel || title}
       accessibilityState={accessibilityState}
       disabled={disabled}
@@ -60,6 +87,11 @@ export function Action<T>({
       style={styles.button}
     >
       <Text style={styles.text}>{title}</Text>
+      {trailing ? (
+        <Text accessibilityElementsHidden style={styles.text}>
+          {trailing}
+        </Text>
+      ) : null}
     </Pressable>
   );
 }
@@ -72,6 +104,8 @@ export function Field({
   multiline = false,
   secureTextEntry = false,
   placeholder,
+  keyboardType,
+  autoFocus = false,
 }: {
   theme: PluginHostProps["theme"];
   label: string;
@@ -80,8 +114,12 @@ export function Field({
   multiline?: boolean;
   secureTextEntry?: boolean;
   placeholder?: string;
+  keyboardType?: TextInputProps["keyboardType"];
+  autoFocus?: boolean;
 }) {
   const nativeId = useId();
+  const { width } = useWindowDimensions();
+  const controlHeight = width < 768 ? 48 : 44;
   const styles = useMemo(
     () => ({
       group: { gap: 6 },
@@ -92,10 +130,12 @@ export function Field({
         borderWidth: 1,
         borderColor: theme.colors.border,
         borderRadius: 8,
-        minHeight: multiline ? 84 : 44,
+        minHeight: multiline ? 112 : controlHeight,
+        textAlignVertical: multiline ? ("top" as const) : ("center" as const),
+        backgroundColor: theme.colors.surface0,
       },
     }),
-    [theme, multiline],
+    [theme, multiline, controlHeight],
   );
   return (
     <View style={styles.group}>
@@ -107,6 +147,8 @@ export function Field({
         onChangeText={onChange}
         multiline={multiline}
         secureTextEntry={secureTextEntry}
+        keyboardType={keyboardType}
+        autoFocus={autoFocus}
         placeholder={placeholder}
         placeholderTextColor={theme.colors.foregroundMuted}
         style={styles.input}
@@ -123,7 +165,7 @@ export function useFactoryStyles({ theme, layout }: Pick<PluginHostProps, "theme
         padding: layout.compact ? 16 : 20,
         gap: 20,
         width: "100%" as const,
-        maxWidth: 1180,
+        maxWidth: 1520,
         alignSelf: "center" as const,
       },
       footer: {
@@ -133,12 +175,15 @@ export function useFactoryStyles({ theme, layout }: Pick<PluginHostProps, "theme
         borderColor: theme.colors.border,
         backgroundColor: theme.colors.surface0,
       },
-      projectPicker: { width: 240 },
+      projectPicker: {
+        width: layout.compact ? undefined : 240,
+        flex: layout.compact ? 1 : undefined,
+      },
       header: {
         flexDirection: "row" as const,
         flexWrap: "wrap" as const,
         gap: 8,
-        alignItems: "center" as const,
+        alignItems: "flex-end" as const,
         justifyContent: "space-between" as const,
       },
       scope: { minWidth: 230, maxWidth: 420, flex: 1 },
@@ -147,16 +192,28 @@ export function useFactoryStyles({ theme, layout }: Pick<PluginHostProps, "theme
         paddingTop: 0,
         paddingBottom: 0,
         gap: 20,
-        maxWidth: 1180,
+        maxWidth: 1520,
         width: "100%" as const,
         alignSelf: "center" as const,
       },
       roleInfo: { flex: 1, minWidth: 200 },
+      fieldGroup: { gap: 6 },
+      roleLine: { paddingVertical: 12, borderBottomWidth: 1, borderColor: theme.colors.border },
+      alignedRow: { flexDirection: "row" as const, alignItems: "center" as const, gap: 16 },
+      roleSummary: { flex: 1, minWidth: 0, gap: 4 },
+      footerActions: { flexDirection: "row" as const, gap: 8, justifyContent: "flex-end" as const },
       row: {
         flexDirection: "row" as const,
         flexWrap: "wrap" as const,
         gap: 8,
         alignItems: "center" as const,
+      },
+      navigation: { flexDirection: "row" as const, gap: 8, paddingBottom: 1 },
+      controls: {
+        flexDirection: "row" as const,
+        alignItems: "flex-end" as const,
+        gap: 12,
+        width: layout.compact ? ("100%" as const) : undefined,
       },
       columns: {
         flexDirection: layout.compact ? ("column" as const) : ("row" as const),
@@ -188,6 +245,89 @@ export function useFactoryStyles({ theme, layout }: Pick<PluginHostProps, "theme
       danger: { color: theme.colors.statusDanger },
     }),
     [theme, layout.compact],
+  );
+}
+
+export function SurfaceSheet(
+  props: PluginHostProps & {
+    title: string;
+    children: ReactNode;
+    onClose(): void;
+    footer?: ReactNode;
+    narrow?: boolean;
+    side?: boolean;
+  },
+) {
+  const styles = useFactoryStyles(props);
+  const { theme, layout, side, narrow } = props;
+  const sheet = useMemo(() => {
+    let alignItems = "center" as "center" | "stretch" | "flex-end";
+    if (side) alignItems = "flex-end";
+    if (layout.compact) alignItems = "stretch";
+    let width: number | "100%" = narrow ? 440 : 640;
+    if (layout.compact) width = "100%";
+    const fullHeight = Boolean(side && !layout.compact);
+    return {
+      overlay: {
+        flex: 1,
+        backgroundColor: "rgba(0,0,0,0.6)",
+        justifyContent: layout.compact ? ("flex-end" as const) : ("center" as const),
+        alignItems,
+      },
+      dismiss: { position: "absolute" as const, inset: 0 },
+      surface: {
+        backgroundColor: theme.colors.surface0,
+        borderColor: theme.colors.border,
+        borderWidth: 1,
+        borderRadius: fullHeight ? 0 : 16,
+        width,
+        maxWidth: "100%" as const,
+        maxHeight: fullHeight ? ("100%" as const) : ("90%" as const),
+        height: fullHeight ? ("100%" as const) : undefined,
+        paddingTop: 4,
+        overflow: "hidden" as const,
+      },
+      header: {
+        ...styles.header,
+        padding: 16,
+        borderBottomWidth: 1,
+        borderColor: theme.colors.border,
+      },
+      body: { padding: 20, gap: 16 },
+    };
+  }, [theme, layout.compact, side, narrow, styles.header]);
+  return (
+    <Modal transparent visible animationType="none" onRequestClose={props.onClose}>
+      <KeyboardAvoidingView
+        behavior={props.layout.platform === "ios" ? "padding" : "height"}
+        style={sheet.overlay}
+      >
+        <Pressable
+          accessibilityLabel="Dismiss dialog"
+          onPress={props.onClose}
+          style={sheet.dismiss}
+        />
+        <SafeAreaView accessibilityViewIsModal style={sheet.surface}>
+          <View style={sheet.header}>
+            <Text accessibilityRole="header" style={styles.heading}>
+              {props.title}
+            </Text>
+            <Action
+              theme={props.theme}
+              title="Close"
+              accessibilityLabel={`Close ${props.title}`}
+              value="close"
+              onAction={props.onClose}
+              compact={props.layout.compact}
+            />
+          </View>
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={sheet.body}>
+            {props.children}
+          </ScrollView>
+          {props.footer ? <View style={styles.footer}>{props.footer}</View> : null}
+        </SafeAreaView>
+      </KeyboardAvoidingView>
+    </Modal>
   );
 }
 

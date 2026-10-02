@@ -12,13 +12,21 @@ import {
   type WorkflowProfile,
   type TeamState,
 } from "../shared/factory-contracts.js";
-import { Action, Field, Disclosure, useFactoryStyles } from "./ui.js";
+import { Action, Field, Disclosure, SurfaceSheet, useFactoryStyles } from "./ui.js";
 import { Choice } from "./choice.js";
 import { RoleBriefFields } from "./role-editor-fields.js";
 import { RoleGraph } from "./role-graph.js";
 import { roleTemplate, type RoleWorkflow } from "../shared/role-builder.js";
 import { resolveWorkflowSteps } from "./workflow-steps.js";
 
+const stageLabels: Record<string, string> = {
+  po: "Plan",
+  developer: "Build",
+  reviewer: "Review",
+  verifier: "Verify",
+  integrator: "Integrate",
+  tester: "Test",
+};
 const emptyProfile: RoleProfileOverride = {};
 const emptyRoles: Record<string, { title: string }> = {};
 const roleGuides: Record<string, { purpose: string; instructions: string }> = {
@@ -140,11 +148,11 @@ function RoleChoice(
     >
       <Text style={styles.muted}>
         Built-in instructions + project defaults
-        {profile.workflowProfileId ? " + selected workflow" : ""}
+        {profile.workflowProfileId ? " + selected role preset" : ""}
       </Text>
       <Choice
         {...props}
-        label="Saved workflow"
+        label="Role preset"
         value={profile.workflowProfileId || ""}
         options={compatibleOptions}
         allowEmpty
@@ -234,34 +242,34 @@ export function WorkflowProfiles(props: PluginSurfaceProps & { projectPath?: str
   );
   return (
     <View style={styles.stack}>
-      <Text style={styles.title}>Roles & workflows</Text>
+      <Text style={styles.title}>Team</Text>
       <Text style={styles.text}>
-        Roles decide who does the work. A workflow adds your instructions, skills and model
-        preferences to a role.
+        Your Head Chef coordinates the mission. Each role has a clear responsibility and hands its
+        result to the next stage.
       </Text>
       <Text style={styles.muted}>
-        The standard team works immediately. Create a custom workflow only where a role needs
-        different instructions.
+        The standard team is ready. Edit a role to create a reusable preset with your instructions,
+        skills and model preferences.
       </Text>
-      {workflow ? <RoleGraph {...props} workflow={workflow} onRole={customize} /> : null}
       <View style={styles.card}>
-        <Text style={styles.heading}>Standard roles · start from a template</Text>
+        <Text style={styles.heading}>Standard team</Text>
         <Text style={styles.muted}>
-          Head Chef coordinates · Plan → Build → Review → Verify → Integrate → Final verification
+          Plan → Build → Review → Verify → Integrate → Final verification
         </Text>
         {packs.error ? <Text style={styles.danger}>{String(packs.error)}</Text> : null}
         {Object.entries(roles).map(([role, details]) => (
-          <View key={role} style={styles.stack}>
-            <View style={styles.header}>
-              <View style={styles.roleInfo}>
-                <Text style={styles.heading}>{details.title}</Text>
+          <View key={role} style={styles.roleLine}>
+            <View style={styles.alignedRow}>
+              <View style={styles.roleSummary}>
+                <Text style={styles.heading}>{stageLabels[role] || details.title}</Text>
                 <Text style={styles.muted}>
                   {roleGuides[role]?.purpose || "Runs this workflow role."}
                 </Text>
               </View>
               <Action
                 theme={props.theme}
-                title={`+ Customize ${details.title}`}
+                title="Edit"
+                accessibilityLabel={`Edit ${stageLabels[role] || details.title} role`}
                 value={role}
                 onAction={customize}
                 variant="secondary"
@@ -270,11 +278,20 @@ export function WorkflowProfiles(props: PluginSurfaceProps & { projectPath?: str
           </View>
         ))}
       </View>
-      <View style={styles.row}>
-        <Text style={styles.heading}>Your saved workflows</Text>
+      {workflow ? (
+        <Disclosure
+          theme={props.theme}
+          title="How the team hands work over"
+          summary="See the actual workflow, returns and verification gates."
+        >
+          <RoleGraph {...props} workflow={workflow} onRole={customize} />
+        </Disclosure>
+      ) : null}
+      <View style={styles.header}>
+        <Text style={styles.heading}>Role presets</Text>
         <Action
           theme={props.theme}
-          title="+ Rolle"
+          title="+ Role preset"
           variant="primary"
           disabled={!workflow}
           value="new"
@@ -282,16 +299,16 @@ export function WorkflowProfiles(props: PluginSurfaceProps & { projectPath?: str
         />
       </View>
       <Text style={styles.muted}>
-        Reusable instructions and ordered steps, with optional provider, model, mode and thinking
-        settings. Apply them to roles when starting a mission or to the next agent on a work item.
+        Save a role recipe once and reuse it in a mission. A preset changes that role’s
+        instructions; the selected workflow pack defines the handoffs.
       </Text>
-      {profiles.isPending ? <Text style={styles.muted}>Loading workflows…</Text> : null}
-      <LoadError {...props} label="Workflow library" error={profiles.error} />
-      <LoadError {...props} label="Save workflow" error={mutation.error} />
-      <LoadError {...props} label="Delete workflow" error={deletion.error} />
+      {profiles.isPending ? <Text style={styles.muted}>Loading role presets…</Text> : null}
+      <LoadError {...props} label="Role presets" error={profiles.error} />
+      <LoadError {...props} label="Save role preset" error={mutation.error} />
+      <LoadError {...props} label="Delete role preset" error={deletion.error} />
       {!profiles.isPending && profiles.data?.profiles.length === 0 ? (
         <Text style={styles.muted}>
-          No custom workflows yet. The built-in team is ready to use.
+          No role presets saved yet. The built-in team is ready to use.
         </Text>
       ) : null}
       {profiles.data?.profiles.map((profile) => (
@@ -304,15 +321,22 @@ export function WorkflowProfiles(props: PluginSurfaceProps & { projectPath?: str
             </Text>
           ) : null}
           <Text style={styles.muted}>
-            {profile.profile.provider || "Inherited provider"} ·{" "}
-            {profile.profile.model || "Inherited model"} · {profile.profile.steps?.length || 0}{" "}
+            {profile.profile.provider || "Inherited provider"} /{" "}
+            {profile.profile.model || "Inherited model"} / {profile.profile.steps?.length || 0}{" "}
             steps
           </Text>
           <View style={styles.row}>
-            <Action theme={props.theme} title="Edit workflow" value={profile} onAction={edit} />
             <Action
               theme={props.theme}
-              title="Delete workflow"
+              title="Edit"
+              accessibilityLabel={`Edit role preset ${profile.name}`}
+              value={profile}
+              onAction={edit}
+            />
+            <Action
+              theme={props.theme}
+              title="Delete"
+              accessibilityLabel={`Delete role preset ${profile.name}`}
               variant="danger"
               value={profile.id}
               onAction={setDeleteId}
@@ -331,7 +355,7 @@ export function WorkflowProfiles(props: PluginSurfaceProps & { projectPath?: str
                 onAction={deleteProfile}
                 disabled={deletion.isPending}
               />
-              <Action theme={props.theme} title="Keep workflow" value="" onAction={setDeleteId} />
+              <Action theme={props.theme} title="Keep preset" value="" onAction={setDeleteId} />
             </View>
           ) : null}
         </View>
@@ -480,12 +504,40 @@ function WorkflowEditor(
       ),
     [onSave, id, name, profile, initialSteps, steps, stepsEdited, cwd, targetRole, brief],
   );
+  const footer = useMemo(
+    () => (
+      <View style={styles.footerActions}>
+        <Action
+          theme={props.theme}
+          title="Cancel"
+          variant="secondary"
+          value="cancel"
+          onAction={props.onCancel}
+          disabled={props.pending}
+        />
+        <Action
+          theme={props.theme}
+          title={props.pending ? "Saving…" : "Save preset"}
+          variant="primary"
+          value="save"
+          disabled={props.pending || !id || !name.trim() || !cwd.trim() || !validBrief(brief)}
+          onAction={persist}
+        />
+      </View>
+    ),
+    [styles.footerActions, props, persist, id, name, cwd, brief],
+  );
   return (
-    <View style={styles.card}>
-      <Text style={styles.heading}>Describe your role</Text>
+    <SurfaceSheet
+      {...props}
+      title={initial.name ? `Edit ${initial.name}` : "Role preset"}
+      onClose={props.onCancel}
+      side
+      footer={footer}
+    >
       <Choice
         {...props}
-        label="Executable role step"
+        label="Role"
         value={targetRole}
         options={roleOptions}
         allowEmpty={!initial.targetRole}
@@ -493,12 +545,12 @@ function WorkflowEditor(
         onChange={chooseRole}
       />
       <Text style={styles.muted}>
-        Changing the executable step loads that role’s template and replaces the draft description
-        and optional instructions.
+        Choose the responsibility you want to customize. Changing roles loads its built-in
+        instructions.
       </Text>
       <Field
         theme={props.theme}
-        label="Role name"
+        label="Preset name"
         value={name}
         onChange={setName}
         placeholder="For example: Accessibility reviewer"
@@ -513,12 +565,12 @@ function WorkflowEditor(
       />
       <Disclosure
         theme={props.theme}
-        title="Optional instructions, steps and skills"
+        title="Instructions & skills"
         summary="Only add detail beyond the role description"
       >
         <Field
           theme={props.theme}
-          label="Role instructions"
+          label="Additional instructions"
           value={profile.instructions || ""}
           onChange={instructionsChanged}
           multiline
@@ -547,7 +599,7 @@ function WorkflowEditor(
       </Disclosure>
       <Disclosure
         theme={props.theme}
-        title="Project & model preferences"
+        title="Model & project"
         defaultOpen={!cwd}
         summary={runtimeSummary}
       >
@@ -557,23 +609,7 @@ function WorkflowEditor(
         Steps are included in the real agent prompt in this order. Kitchen’s phase gates and
         acceptance evidence still apply.
       </Text>
-      <View style={styles.row}>
-        <Action
-          theme={props.theme}
-          title={props.pending ? "Saving…" : "Save role"}
-          variant="primary"
-          value="save"
-          disabled={props.pending || !id || !name.trim() || !cwd.trim() || !validBrief(brief)}
-          onAction={persist}
-        />
-        <Action
-          theme={props.theme}
-          title="Cancel editing"
-          value="cancel"
-          onAction={props.onCancel}
-        />
-      </View>
-    </View>
+    </SurfaceSheet>
   );
 }
 

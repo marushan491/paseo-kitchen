@@ -19,7 +19,7 @@ import { DashboardSettings } from "./dashboard/settings.js";
 import { FactorySettings } from "./settings.js";
 import { WorkflowProfiles, WorkItemProfileSettings } from "./workflows.js";
 
-const sections = ["Overview", "Kitchen", "Missions", "Roles & workflows", "Settings"] as const;
+const sections = ["Overview", "Kitchen", "Missions", "Team", "Settings"] as const;
 const emptyTeams: TeamState[] = [];
 const emptyRoles = {};
 const settingsTitles = {
@@ -37,7 +37,6 @@ export function Studio(
   const styles = useFactoryStyles(props);
   const paseo = usePaseo();
   const [section, setSection] = useState<Section>(props.agentId ? "Missions" : "Overview");
-  const [monitor, setMonitor] = useState<"overview" | "activity" | "problems">("overview");
   const [project, setProject] = useState("");
   const [createNew, setCreateNew] = useState(Boolean(props.agentId));
   const [selectedTeam, setSelectedTeam] = useState("");
@@ -87,6 +86,7 @@ export function Studio(
     setCreateNew(true);
     setSection("Missions");
   }, []);
+  const cancelMission = useCallback(() => setCreateNew(false), []);
   const selectSection = useCallback((value: Section) => {
     setSection(value);
     setSelectedAgent("");
@@ -95,7 +95,6 @@ export function Studio(
     setProject(value);
     setSelectedTeam("");
     setSelectedAgent("");
-    setCreateNew(false);
   }, []);
   const teamNavigation = useCallback(
     (teamId?: string) => {
@@ -110,16 +109,14 @@ export function Studio(
         <View style={styles.header}>
           <View style={styles.stack}>
             <Text style={styles.title}>Kitchen Studio</Text>
-            <Text style={styles.muted}>
-              Give your agents a goal. Follow the work. Review the result.
-            </Text>
+            <Text style={styles.muted}>Turn a goal into verified work.</Text>
           </View>
-          <View style={styles.row}>
+          <View style={styles.controls}>
             {section !== "Settings" ? (
               <View style={styles.projectPicker}>
                 <Choice
                   {...props}
-                  label="Project scope"
+                  label="Project"
                   value={project}
                   options={projectOptions}
                   allowEmpty
@@ -130,93 +127,57 @@ export function Studio(
             ) : null}
             <Action
               theme={props.theme}
-              title="+ New mission"
-              accessibilityLabel="New mission"
+              title="Start mission"
+              accessibilityLabel="Start mission"
+              compact={props.layout.compact}
               variant="primary"
               value="new"
               onAction={newMission}
-            />{" "}
+            />
           </View>
         </View>
-        <View style={styles.row}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.navigation}
+        >
           {sections.map((name) => (
             <Action
               key={name}
               theme={props.theme}
               title={name}
               accessibilityLabel={name === "Settings" ? "Studio settings" : name}
+              variant="tab"
+              compact={props.layout.compact}
               selected={section === name}
               value={name}
               onAction={selectSection}
             />
           ))}
-        </View>
+        </ScrollView>
         {projects.error ? (
           <Text style={styles.danger}>Projects could not load: {String(projects.error)}</Text>
         ) : null}
       </View>
       {section === "Missions" ? (
         <Factory
-          key={`${selectedTeam}:${createNew}:${project}`}
+          key={`${selectedTeam}:${createNew}`}
           {...props}
           projectPath={project}
           selectedTeamId={selectedTeam}
           createNew={createNew}
           onCreated={openTeam}
           onNew={newMission}
+          onCancel={cancelMission}
         />
       ) : null}
       {section === "Overview" ? (
-        <View style={styles.screen}>
-          <View style={styles.flush}>
-            <View style={styles.row}>
-              <Action
-                theme={props.theme}
-                title="Needs you"
-                selected={monitor === "overview"}
-                value={"overview" as const}
-                onAction={setMonitor}
-              />
-              <Action
-                theme={props.theme}
-                title="Activity"
-                selected={monitor === "activity"}
-                value={"activity" as const}
-                onAction={setMonitor}
-              />
-              <Action
-                theme={props.theme}
-                title="Problems"
-                selected={monitor === "problems"}
-                value={"problems" as const}
-                onAction={setMonitor}
-              />
-            </View>
-            {allTeams.length === 0 && monitor === "overview" ? (
-              <View style={styles.card}>
-                <Text style={styles.heading}>Your first Kitchen mission</Text>
-                <Text style={styles.text}>
-                  Choose a project and describe a feature or a whole product. Kitchen plans the
-                  work, assigns roles and continues until your goal is verified.
-                </Text>
-                <Text style={styles.muted}>Plan → Build → Review → Verify → Your acceptance</Text>
-                <Action
-                  theme={props.theme}
-                  title="Create your first mission"
-                  variant="primary"
-                  value="new"
-                  onAction={newMission}
-                />
-              </View>
-            ) : null}
-          </View>
-          <Dashboard
-            {...props}
-            projectPath={project}
-            section={monitor}
-            teamNavigation={teamNavigation}
-          />
-        </View>
+        <Dashboard
+          {...props}
+          projectPath={project}
+          section="overview"
+          teamNavigation={teamNavigation}
+        />
       ) : null}
       {section === "Kitchen" ? (
         <ScrollView contentContainerStyle={styles.content}>
@@ -241,7 +202,7 @@ export function Studio(
           ) : null}
         </ScrollView>
       ) : null}
-      {section === "Roles & workflows" ? (
+      {section === "Team" ? (
         <ScrollView contentContainerStyle={styles.content}>
           <WorkflowProfiles {...props} projectPath={project} />
         </ScrollView>
@@ -260,9 +221,13 @@ export function StudioSettings(props: PluginSurfaceProps) {
         <Text style={styles.title}>Settings</Text>
         <Text style={styles.muted}>
           Connection and capacity for this host. Mission goals and role instructions live in
-          Missions and Roles & workflows.
+          Missions and Team.
         </Text>
-        <View style={styles.row}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.navigation}
+        >
           {settingsPages.map((name) => (
             <Action
               key={name}
@@ -274,7 +239,7 @@ export function StudioSettings(props: PluginSurfaceProps) {
               onAction={setPage}
             />
           ))}
-        </View>
+        </ScrollView>
       </View>
       {page === "Kitchen" ? <FactorySettings {...props} /> : null}
       {page === "Overview" ? <DashboardSettings {...props} /> : null}

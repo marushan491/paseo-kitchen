@@ -6,6 +6,8 @@ import {
   kitchenInsights,
   parseCriteria,
   parsePolicyDraft,
+  missionCriteria,
+  missionName,
 } from "./kitchen-model.js";
 
 function ready(): TeamState {
@@ -54,6 +56,19 @@ function ready(): TeamState {
 }
 
 describe("Kitchen acceptance", () => {
+  it("keeps the actual goal as required acceptance evidence when optional success is empty", () => {
+    const goal = "Restore login across restarts\nAlso handle expired credentials";
+    expect(missionCriteria(goal, " \n ")).toEqual([{ id: "goal", text: goal }]);
+    expect(
+      missionCriteria(goal, "Login survives restart\nExpired credentials prompt sign-in"),
+    ).toEqual([
+      { id: "criterion-1", text: "Login survives restart" },
+      { id: "criterion-2", text: "Expired credentials prompt sign-in" },
+    ]);
+    expect(missionCriteria(" ", "")).toEqual([]);
+    expect(missionName("Login restoration", goal)).toBe("Login restoration");
+    expect(missionName("", goal)).toBe("Restore login across restarts");
+  });
   it("requires evidence bound to a full final candidate and a finished Cook", () => {
     const state = ready();
     expect(acceptanceProblem(state)).toBeNull();

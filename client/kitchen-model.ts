@@ -5,6 +5,22 @@ import {
   type TeamState,
 } from "../shared/factory-contracts.js";
 
+export function missionCriteria(objective: string, success: string) {
+  const criteria = parseCriteria(success);
+  if (criteria.length) return criteria;
+  return objective.trim() ? [{ id: "goal", text: objective.trim() }] : [];
+}
+
+export function missionName(name: string, objective: string) {
+  if (name.trim()) return name.trim();
+  const first =
+    objective
+      .trim()
+      .split(/\n|[.!?]\s/)[0]
+      ?.replace(/\s+/g, " ") || "";
+  return first.length > 72 ? `${first.slice(0, 69).trimEnd()}…` : first;
+}
+
 export function acceptanceProblem(state: TeamState): string | null {
   const root = state.items[state.team.rootItemId];
   if (state.team.status === "done" || state.team.status === "canceled")
