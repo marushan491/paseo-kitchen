@@ -1,0 +1,157 @@
+{
+  "host": "PandaOS",
+  "qa": "Deterministic browser layout checks; actual mission uses free OpenCode Muse. No Jev/paid model calls in these captures. Compact browser screenshots do not establish native Android coverage.",
+  "screenshots": [
+    {
+      "file": "overview.png",
+      "dimensions": [1440, 900],
+      "sha256": "d971ad948bdb709c6296de28fbc031104c44a95355fd10bb46c37c0cd0af39f8",
+      "capturedAt": "2026-10-03T01:44:54.003Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_7e66fce8-0f45-4b50-8fec-80b12098af50/screenshot"
+    },
+    {
+      "file": "kitchen.png",
+      "dimensions": [1440, 900],
+      "sha256": "1295ed1af73cc38fe4ba280d84e849a297ebaff2e4ef7a793bc6521525adfc77",
+      "capturedAt": "2026-10-03T02:15:42.105Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_425bae72-25ce-47ee-a83c-994d2358d2ab/screenshot"
+    },
+    {
+      "file": "kitchen-empty.png",
+      "dimensions": [1440, 900],
+      "sha256": "247ac718292dc73b21159d1ad6dd1089a15ad22c701c105a58f0959dbfdd9ca7",
+      "capturedAt": "2026-10-03T01:51:47.776Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_493bf293-1c7a-4bc2-938b-f0ee1347a0e2/screenshot"
+    },
+    {
+      "file": "kitchen-agent.png",
+      "dimensions": [1440, 900],
+      "sha256": "fe1626da2625960eda38086d207c1ff9d2923524f21444cc8d6db261c8199975",
+      "capturedAt": "2026-10-03T02:12:06.353Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_fe741945-fd53-48a5-ad11-a6bf3025c925/screenshot"
+    },
+    {
+      "file": "kitchen-station.png",
+      "dimensions": [1440, 900],
+      "sha256": "5a130a34af4375696444d15e093908ca2b1c65447503c3c825ccff0db091719e",
+      "capturedAt": "2026-10-03T02:15:45.138Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_ce1b6c94-eec0-4ad4-a930-95078f32fa59/screenshot"
+    },
+    {
+      "file": "missions.png",
+      "dimensions": [1440, 900],
+      "sha256": "eabb788d3cd44cd04d7f269586ee49e9dbec7b4ce028112e8447d528db945f31",
+      "capturedAt": "2026-10-03T01:44:55.455Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_3cf3c2e6-15bd-42f5-bbd7-db2ccdb8b899/screenshot"
+    },
+    {
+      "file": "mission-detail.png",
+      "dimensions": [1440, 900],
+      "sha256": "d79a7faf938a0fff3bee7ab17193609257ed6ebeb6ca889e2aa9735ceaa1c896",
+      "capturedAt": "2026-10-03T01:45:14.581Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_b3a6de67-6bcf-4a7e-8d15-f563f39573c5/screenshot"
+    },
+    {
+      "file": "mission-evidence.png",
+      "dimensions": [1440, 900],
+      "sha256": "1acd9057eba89daa655ed5f5699237033a1d63e77fa7c1c140d3e245f359e82e",
+      "capturedAt": "2026-10-03T01:45:16.335Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_7298b283-461e-413e-b2cd-f40dc0f58809/screenshot"
+    },
+    {
+      "file": "mission-final-candidate.png",
+      "dimensions": [1440, 900],
+      "sha256": "c12685f8319cae76cb6325fe8adeb546a9149970494ea599398ee3d23c78418b",
+      "capturedAt": "2026-10-03T01:49:17.146Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_71bd1e68-d5ff-4fcf-a7c8-40e2fef9e572/screenshot"
+    },
+    {
+      "file": "roles-workflows.png",
+      "dimensions": [1920, 1080],
+      "sha256": "c1fd91c2675e8f9c99f9c1a78e70d5e2ecb93058163bf798501cff7418625fa6",
+      "capturedAt": "2026-10-03T01:40:00.242Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_3c719607-4817-468f-9f96-de7bc1e7418c/screenshot"
+    },
+    {
+      "file": "workflow-task.png",
+      "dimensions": [1920, 1080],
+      "sha256": "e1eb9d9a814230761e7e8ca90575ec22c378f24c948d2fd679ec7690a0705d99",
+      "capturedAt": "2026-10-03T01:41:03.525Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_a84bb35b-f9fe-4d91-8cec-26f85a96b0f7/screenshot"
+    },
+    {
+      "file": "role-editor.png",
+      "dimensions": [1920, 1080],
+      "sha256": "f0676668f60e86421de179a3f6182ac342770b44e586c883cd10018aa77e2090",
+      "capturedAt": "2026-10-03T01:40:13.046Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_13ac9061-c369-4c25-b17b-92f99ab8fd81/screenshot"
+    },
+    {
+      "file": "workflow-connection.png",
+      "dimensions": [1920, 1080],
+      "sha256": "191067f90acd92f94022c2022fb3326c85697345cc61812e25215de71db1fbdb",
+      "capturedAt": "2026-10-03T01:42:04.320Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_fd44b754-542e-4326-a8a6-b6665fc0cafd/screenshot"
+    },
+    {
+      "file": "settings.png",
+      "dimensions": [1440, 900],
+      "sha256": "be4a1d797cfbc19e05429b5a0ea5cdff47cf3f61a1712925624d0a08502ca8f7",
+      "capturedAt": "2026-10-03T01:49:18.928Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_2e717ff6-dbd5-4aff-bef2-6d3aff540c75/screenshot"
+    },
+    {
+      "file": "native-composer.png",
+      "dimensions": [1440, 900],
+      "sha256": "61c9a2c2b42fe22390e882dfa5e7781b10bc3df576134bc0bc255b18a5b420f4",
+      "capturedAt": "2026-10-03T01:50:25.223Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_bdccdb22-0e12-4ba2-850a-f250a5dd3ff4/screenshot"
+    },
+    {
+      "file": "team-presets.png",
+      "dimensions": [1440, 900],
+      "sha256": "70eb89eef340e9d2f52e0c4bb09fa800844d9af3b1dd28e65804d170eb2bdf04",
+      "capturedAt": "2026-10-03T01:50:26.674Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_39509b7e-0986-46f2-879d-fba403251964/screenshot"
+    },
+    {
+      "file": "mobile-stages.png",
+      "dimensions": [390, 844],
+      "sha256": "a2e33321f8d3571f9d9fec7b65aa4d9cbd65636f47acabe4a5648972d2b14ce6",
+      "capturedAt": "2026-10-03T02:14:50.627Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_365294fd-7047-4a50-8593-9a3697cf7848/screenshot"
+    },
+    {
+      "file": "mobile-map.png",
+      "dimensions": [390, 844],
+      "sha256": "8bd0ce230c47008f0a6d886fa81dc2e632a296ccd0d0932f82708534ffb7cb7a",
+      "capturedAt": "2026-10-03T02:15:38.104Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_d87cb4e5-7906-4460-af6a-dc4d4ea76e00/screenshot"
+    },
+    {
+      "file": "mobile-agent.png",
+      "dimensions": [390, 844],
+      "sha256": "30fb9a7cffd2a77416c2cb0c55cf51a7c360d94e4b180ae4734b3a38a0e06b36",
+      "capturedAt": "2026-10-03T02:12:03.511Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_42fd7a36-d061-4a20-8957-903b4f2d22ef/screenshot"
+    },
+    {
+      "file": "mobile-presets.png",
+      "dimensions": [390, 844],
+      "sha256": "47b97b2d13880702ea2f30b0606ed57b95c78b95261a774b857bc6413f3139ee",
+      "capturedAt": "2026-10-03T01:37:11.532Z",
+      "evidenceRef": "evidence://wks_51314d22476ca196/evr_3bed5499-f339-4432-88f2-d2f05fbe5daf/screenshot"
+    },
+    {
+      "file": "native-chat.png",
+      "dimensions": [1280, 720],
+      "sha256": "ca6549f1dabc8a8a5137e4123508bd950f624f6444c86884ba6a5b7e62494ce8",
+      "evidenceRef": "Root retained native-initial-chat capture",
+      "note": "Shows initial text and persisted mission card; attached image is not visually displayed in this bubble.",
+      "captureStatus": "Fresh Root capture after final live QA; copied from the retained original."
+    }
+  ],
+  "verifiedHostCore": "ffb79e37c",
+  "verifiedPluginSource": "20a79c8331a878b57c11c85f7107355ac0055f73",
+  "layoutRegression": "Mission URL \u2192 Kitchen \u2192 kitchen-native-qa \u2192 Head Chef station and agent inspector \u21921440\u00d7900\u2192390\u00d7844\u21921440\u00d7900. Both roundtrips retained view, project and inspector; no horizontal document overflow. Final compact stages exclude canceled history and show all six completed work stages."
+}
