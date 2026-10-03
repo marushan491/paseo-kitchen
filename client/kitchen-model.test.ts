@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { TeamState, TeamEvent } from "../shared/factory-contracts.js";
 import {
   acceptanceProblem,
+  canReverify,
+  missionInitialObjective,
   kitchenInsights,
   parseCriteria,
   parsePolicyDraft,
@@ -56,6 +58,26 @@ function ready(): TeamState {
 }
 
 describe("Kitchen acceptance", () => {
+  it("shows the original mission goal and requires verification of the current native context", () => {
+    expect(
+      missionInitialObjective(
+        "Build a calculator\n\n## Additional user context\nInternal notification\nReferences: {}",
+      ),
+    ).toBe("Build a calculator");
+    const state = ready();
+    state.team.kitchen = { nativeConversation: true };
+    state.items.root.pack.nativeContextMessageId = "latest";
+    state.items.root.pack.verifiedNativeContextMessageId = "old";
+    expect(acceptanceProblem(state)).toContain("context changed");
+    expect(canReverify(state)).toBe(true);
+    state.items.root.pack.verifiedNativeContextMessageId = "latest";
+    expect(acceptanceProblem(state)).toBeNull();
+    state.team.status = "paused";
+    expect(canReverify(state)).toBe(false);
+    state.team.status = "done";
+    expect(canReverify(state)).toBe(false);
+  });
+
   it("keeps the actual goal as required acceptance evidence when optional success is empty", () => {
     const goal = "Restore login across restarts\nAlso handle expired credentials";
     expect(missionCriteria(goal, " \n ")).toEqual([{ id: "goal", text: goal }]);

@@ -1136,7 +1136,7 @@ export class TeamService {
 
   async controlKitchen(
     teamId: string,
-    action: "pause" | "resume" | "stop" | "cancel" | "accept",
+    action: "pause" | "resume" | "stop" | "cancel" | "accept" | "reverify",
     actorId: string,
     approval?: { credential?: string; candidateCommit?: string },
   ): Promise<TeamState> {
@@ -1150,6 +1150,8 @@ export class TeamService {
           return { events: [], result: null };
         throw new Error("Finished Kitchen cannot resume or change state");
       }
+      if (action === "reverify")
+        return { events: await this.reverifyKitchen(draft, actorId), result: null };
       if (action === "resume") {
         if (runtime.limitReason) throw new Error(`Kitchen limit reached: ${runtime.limitReason}`);
         const pack = this.pack(draft.team);
@@ -1197,7 +1199,127 @@ export class TeamService {
     }
     const state = (await this.store.get(teamId))!;
     await this.syncKitchenBoss(state.team);
+    if (action === "reverify") void this.dispatchAll();
     return state;
+  }
+
+  private async reverifyKitchen(draft: TeamState, actorId: string): Promise<TeamEventDraft[]> {
+    if (draft.team.status !== "active" || draft.team.kitchen?.stopped)
+      throw new Error("Resume the Kitchen queue before rechecking its final candidate");
+    if (draft.team.runtime?.limitReason)
+      throw new Error(`Kitchen limit reached: ${draft.team.runtime.limitReason}`);
+    if (draft.team.policy)
+      assertPolicyAllows(draft.team.policy, await this.policyObservation(draft));
+    if (Object.values(draft.decisions).some((decision) => decision.status === "leased"))
+      throw new Error("Wait for active Kitchen dispatch to finish before rechecking");
+    if (
+      (
+        await Promise.all(
+          Object.values(draft.bindings)
+            .filter((binding) => binding.agentId)
+            .map((binding) => this.options.controller.isRunning(binding.agentId)),
+        )
+      ).some(Boolean)
+    )
+      throw new Error("Wait for all Cooks to finish before rechecking Kitchen");
+    const root = draft.items[draft.team.rootItemId];
+    const pack = this.pack(draft.team);
+    const phase = root.phaseHistory.findLast((entry) => pack.boards.root.phases[entry.phase]?.role);
+    if (
+      !phase ||
+      pack.boards.root.phases[phase.phase]?.role !== "verifier" ||
+      !["ready-for-human", "blocked", phase.phase].includes(root.phase)
+    )
+      throw new Error("Recheck requires an existing final verification candidate");
+    for (const criterion of root.acceptanceCriteria) {
+      delete criterion.met;
+      delete criterion.evidence;
+    }
+    delete root.pack.verifiedCommit;
+    delete root.pack.verifiedNativeContextMessageId;
+    for (const decision of Object.values(draft.decisions))
+      if (
+        decision.workItemId === root.id &&
+        ["pending", "retry", "proposed"].includes(decision.status)
+      )
+        decision.status = "superseded";
+    for (const binding of Object.values(draft.bindings))
+      if (binding.workItemId === root.id && binding.status === "active") {
+        chargeBinding(draft, binding, this.now().getTime());
+        binding.status = "revoked";
+        binding.revokedAt = this.now().toISOString();
+      }
+    const events: TeamEventDraft[] = [];
+    enterPhase(
+      draft,
+      pack,
+      root,
+      phase.phase,
+      { type: "human", id: actorId },
+      events,
+      "explicit recheck of final candidate against current mission context",
+    );
+    return events;
+  }
+
+  private assertVerifierReportContext(
+    state: TeamState,
+    item: WorkItem | undefined,
+    role: Role | undefined,
+  ): void {
+    if (item && role?.id === "verifier") this.assertNativeContextFresh(state, item);
+  }
+
+  private assertNativeContextFresh(state: TeamState, item: WorkItem, verified = false): void {
+    if (!state.team.kitchen?.nativeConversation) return;
+    const proof = item.pack.verifierProtection as
+      | { nativeContextMessageId?: string; nativeContextDeliveryPending?: boolean }
+      | undefined;
+    if (!verified && proof?.nativeContextDeliveryPending)
+      throw new ReportRejectedError("Wait for delivery of the verifier's current mission context");
+    const latest = state.items[state.team.rootItemId].pack.nativeContextMessageId;
+    const observed = verified
+      ? item.pack.verifiedNativeContextMessageId
+      : proof?.nativeContextMessageId;
+    if (typeof latest === "string" && observed !== latest)
+      throw new ReportRejectedError(
+        "Mission context changed after verification. Recheck the final candidate before accepting or publishing.",
+      );
+  }
+
+  private async verifierContextDelivery(
+    state: TeamState,
+    item: WorkItem,
+    role: Role,
+    agentId: string,
+    pending: boolean,
+    messageId?: unknown,
+  ): Promise<void> {
+    if (!state.team.kitchen?.nativeConversation || role.id !== "verifier") return;
+    const root = state.items[state.team.rootItemId];
+    const contextId =
+      messageId ?? root.pack.nativeContextMessageId ?? root.pack.nativeInitialMessageId;
+    await this.store.commit(state.team.id, (draft) => {
+      const target = draft.items[item.id];
+      const proof = target?.pack.verifierProtection as
+        | {
+            agentId: string;
+            revision: number;
+            nativeContextMessageId?: string;
+            nativeContextDeliveryPending?: boolean;
+          }
+        | undefined;
+      if (
+        !proof ||
+        proof.agentId !== agentId ||
+        target.revision !== item.revision ||
+        proof.revision !== item.revision
+      )
+        throw new ReportRejectedError("Verifier context delivery belongs to a previous phase");
+      proof.nativeContextMessageId = typeof contextId === "string" ? contextId : undefined;
+      proof.nativeContextDeliveryPending = pending;
+      return { events: [], result: null };
+    });
   }
 
   async publish(teamId: string, credential: string, candidateCommit: string): Promise<TeamState> {
@@ -1219,6 +1341,7 @@ export class TeamService {
       if (!this.options.publicationCli)
         throw new Error("Configure a trusted publication CLI on this host before publishing");
       const root = draft.items[draft.team.rootItemId]!;
+      this.assertNativeContextFresh(draft, root, true);
       const verifier = draft.bindings[root.bindings.verifier ?? ""];
       const agent = verifier ? await this.options.controller.get(verifier.agentId) : null;
       if (!agent) throw new Error("Verified publication checkout is unavailable");
@@ -1253,6 +1376,7 @@ export class TeamService {
     root: WorkItem,
     commit: string,
   ): Promise<void> {
+    this.assertNativeContextFresh(draft, root, true);
     if (
       !root.acceptanceCriteria.length ||
       root.acceptanceCriteria.some((criterion) => !criterion.met || !criterion.evidence?.trim())
@@ -1729,6 +1853,7 @@ export class TeamService {
     if (team) assertMutableTeam(team.team);
     const role = team ? this.pack(team.team).roles[caller.binding.role] : undefined;
     this.assertCommunication(role, payload, team);
+    const verified = role?.id === "verifier" && payload.outcome === "pass" && !payload.needs;
     const checks = await this.verifyReportCheckout(
       agentId,
       team,
@@ -1767,6 +1892,7 @@ export class TeamService {
         const binding = draft.bindings[caller.binding.id]!;
         const events: TeamEventDraft[] = [];
         const target = draft.items[binding.workItemId];
+        if (target && verified) this.assertNativeContextFresh(draft, target);
         if (branch && target && binding.phase === target.phase) {
           target.artifacts = target.artifacts.filter((a) => a.kind !== "branch");
           target.artifacts.push({ kind: "branch", ref: branch });
@@ -1780,6 +1906,10 @@ export class TeamService {
         }
         chargeBinding(draft, binding, this.now().getTime());
         const item = applyReport(draft, this.pack(draft.team), binding, payload, events);
+        if (verified)
+          item.pack.verifiedNativeContextMessageId = (
+            item.pack.verifierProtection as { nativeContextMessageId?: string } | undefined
+          )?.nativeContextMessageId;
         if (payload.needs && item.phase === "blocked") {
           item.pack.questionCategory = payload.needs.category ?? "clarification";
           if (payload.needs.kind === "human")
@@ -1976,6 +2106,7 @@ export class TeamService {
     await this.assertVerifiedCheckout(record.cwd, commit);
     const binding = findSeat(state, agentId);
     const item = binding ? state.items[binding.workItemId] : undefined;
+    this.assertVerifierReportContext(state, item, role);
     const proof = item?.pack.verifierProtection as
       | { agentId: string; revision: number; snapshot: ProtectedSnapshot }
       | undefined;
@@ -2579,11 +2710,27 @@ export class TeamService {
       await this.recordWorkflowBaseline(state, item, role, record!.cwd);
       await this.protectVerifier(state, item, role, binding.agentId, record!.cwd);
     }
+    await this.verifierContextDelivery(
+      state,
+      item,
+      role,
+      binding.agentId,
+      true,
+      decision.payload.nativeBriefMessageId,
+    );
     await this.options.controller.send(
       binding.agentId,
       text,
       decision.payload.steer ? "steer" : undefined,
       this.nativeBrief(state, decision.payload.nativeBriefMessageId),
+    );
+    await this.verifierContextDelivery(
+      state,
+      item,
+      role,
+      binding.agentId,
+      false,
+      decision.payload.nativeBriefMessageId,
     );
     return (draft) => {
       const b = draft.bindings[binding.id];
@@ -2753,12 +2900,14 @@ export class TeamService {
         return () => [];
       await this.recordWorkflowBaseline(state, item, role, record!.cwd);
       await this.protectVerifier(state, item, role, agentId, record!.cwd);
+      await this.verifierContextDelivery(state, item, role, agentId, true);
       await this.options.controller.send(
         agentId,
         await this.workPacket(state, pack, item, role),
         undefined,
         this.nativeBrief(state),
       );
+      await this.verifierContextDelivery(state, item, role, agentId, false);
     }
     const finalAgentId = agentId;
     return (draft) => {

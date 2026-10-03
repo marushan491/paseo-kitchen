@@ -445,7 +445,7 @@ export const factoryKitchenControl = defineRpc({
   name: "factory.kitchen.control",
   input: z.object({
     teamId: TeamIdSchema,
-    action: z.enum(["pause", "resume", "stop", "cancel", "accept"]),
+    action: z.enum(["pause", "resume", "stop", "cancel", "accept", "reverify"]),
     actorId: z.string().min(1),
     credential: z.string().min(1).max(4096).optional(),
     candidateCommit: z

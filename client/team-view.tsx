@@ -17,7 +17,12 @@ import {
 import { Action, Field, Disclosure, useFactoryStyles } from "./ui.js";
 import { WorkItemProfileSettings } from "./workflows.js";
 import { AgentTimeline } from "./timeline.js";
-import { acceptanceProblem, kitchenInsights } from "./kitchen-model.js";
+import {
+  acceptanceProblem,
+  kitchenInsights,
+  canReverify,
+  missionInitialObjective,
+} from "./kitchen-model.js";
 import {
   MissionStory,
   MissionEvidence,
@@ -29,7 +34,7 @@ import { useMissionAgents } from "./mission-agents.js";
 
 const emptyRoles = {};
 const views = ["Stages", "Evidence", "Activity", "Team chat"] as const;
-type Control = "pause" | "resume" | "stop" | "cancel" | "accept";
+type Control = "pause" | "resume" | "stop" | "cancel" | "accept" | "reverify";
 
 export function TeamView(props: PluginSurfaceProps & { teamId: string }) {
   const { theme, teamId, navigation } = props;
@@ -239,7 +244,7 @@ function MissionHeader(
   return (
     <View style={styles.stack}>
       <Text style={styles.title}>{state.team.title}</Text>
-      <Text style={styles.text}>{state.team.objective}</Text>
+      <Text style={styles.text}>{missionInitialObjective(state.team.objective)}</Text>
       <Text style={styles.muted}>
         {state.team.kitchen?.missionMode === "goal-driven"
           ? "Goal-driven · discovering and completing scoped work until the goal is verified."
@@ -303,6 +308,21 @@ function KitchenVerification(
           {problem || "Ready for your acceptance. Server checks run again when accepting."}
         </Text>
       )}
+      {canReverify(state) ? (
+        <Action
+          theme={theme}
+          title="Recheck final candidate"
+          value="reverify"
+          onAction={onControl}
+          disabled={
+            pending ||
+            Object.values(state.bindings).some(
+              (binding) =>
+                binding.status === "active" && ["starting", "running"].includes(binding.turn),
+            )
+          }
+        />
+      ) : null}
       <Action
         theme={theme}
         title="Accept verified result"
@@ -318,6 +338,7 @@ const confirmationTitles: Record<Control, string> = {
   pause: "Pause queue",
   resume: "Resume queue",
   accept: "Accept the verified result?",
+  reverify: "Recheck final candidate",
   stop: "Interrupt all active Cooks?",
   cancel: "Cancel this Kitchen run?",
 };

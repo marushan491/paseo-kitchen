@@ -27,6 +27,12 @@ export function acceptanceProblem(state: TeamState): string | null {
     return "This run is closed.";
   if (root?.phase !== "ready-for-human") return "Wait for final verification and human review.";
   if (
+    state.team.kitchen?.nativeConversation &&
+    typeof root.pack.nativeContextMessageId === "string" &&
+    root.pack.verifiedNativeContextMessageId !== root.pack.nativeContextMessageId
+  )
+    return "Mission context changed after verification. Recheck the final candidate.";
+  if (
     typeof root.pack.verifiedCommit !== "string" ||
     !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(root.pack.verifiedCommit)
   )
@@ -89,4 +95,21 @@ export function parsePolicyDraft(draft: PolicyDraft) {
   );
   if (draft.requireOutcomeJudge === "required") values.requireOutcomeJudge = true;
   return FactoryPolicySchema.safeParse(values);
+}
+
+export function missionInitialObjective(objective: string): string {
+  return objective.split("\n\n## Additional user context\n")[0]!.trim();
+}
+
+export function canReverify(state: TeamState): boolean {
+  const root = state.items[state.team.rootItemId];
+  if (state.team.status !== "active" || state.team.kitchen?.stopped || !root) return false;
+  if (root.phase === "ready-for-human") return true;
+  return Object.values(state.bindings).some(
+    (binding) =>
+      binding.workItemId === root.id &&
+      binding.role === "verifier" &&
+      (binding.phase === root.phase ||
+        (root.phase === "blocked" && binding.revisionAtStart === root.revision - 1)),
+  );
 }

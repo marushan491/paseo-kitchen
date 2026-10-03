@@ -2426,6 +2426,11 @@ describe("Kitchen runtime", () => {
     const combinedHead = (
       await git("git", ["-C", integrator.cwd, "rev-parse", "HEAD"])
     ).stdout.trim();
+    await service.store.commit(team.team.id, (draft) => {
+      draft.team.kitchen!.nativeConversation = true;
+      draft.items[draft.team.rootItemId].pack.nativeInitialMessageId = "native:initial";
+      return { events: [], result: null };
+    });
     await service.report(integrator.id, {
       outcome: "done",
       summary: "Combined",
@@ -2439,6 +2444,25 @@ describe("Kitchen runtime", () => {
         agent.labels["agent-factory.team.item"] === state.team.rootItemId,
     )!;
     expect(finalVerifier.cwd).toBe(integrator.cwd);
+    await service.acceptUserMessage({
+      agentId: team.team.bossAgentId,
+      eventId: "native:during-verification",
+      text: "Check the combined behavior against this clarification",
+      origin: { kind: "client" },
+    });
+    await expect(
+      service.report(finalVerifier.id, {
+        outcome: "pass",
+        summary: "Stale verifier response",
+        artifacts: [{ kind: "commit", ref: combinedHead }],
+        criteria: state.items[state.team.rootItemId].acceptanceCriteria.map((criterion) => ({
+          id: criterion.id,
+          met: true,
+          evidence: "Old context only",
+        })),
+      }),
+    ).rejects.toThrow(/Mission context changed/);
+    await service.dispatchAll();
     await service.report(finalVerifier.id, {
       outcome: "pass",
       summary: "Combined candidate verified",
@@ -2453,6 +2477,55 @@ describe("Kitchen runtime", () => {
     expect((await service.status(team.team.id)).state.items[state.team.rootItemId]!.phase).toBe(
       "ready-for-human",
     );
+    const initialVerified = (await service.status(team.team.id)).state;
+    expect(
+      initialVerified.items[initialVerified.team.rootItemId].pack.verifiedNativeContextMessageId,
+    ).toBe("native:during-verification");
+    const cooksBefore = host.created.length;
+    await service.acceptUserMessage({
+      agentId: team.team.bossAgentId,
+      eventId: "native:revised-requirements",
+      text: "Also independently recheck the combined behavior",
+      origin: { kind: "client" },
+    });
+    await service.dispatchAll();
+    expect(host.created).toHaveLength(cooksBefore);
+    await expect(
+      service.controlKitchen(team.team.id, "accept", "operator", {
+        credential: "synthetic-test-operator-capability-32-chars",
+        candidateCommit: combinedHead,
+      }),
+    ).rejects.toThrow(/Mission context changed/);
+    await service.controlKitchen(team.team.id, "pause", "operator");
+    await expect(service.controlKitchen(team.team.id, "reverify", "operator")).rejects.toThrow(
+      /Resume/,
+    );
+    await service.controlKitchen(team.team.id, "resume", "operator");
+    await service.controlKitchen(team.team.id, "reverify", "operator");
+    await service.dispatchAll();
+    const rechecked = (await service.status(team.team.id)).state;
+    expect(rechecked.team.id).toBe(team.team.id);
+    expect(host.created).toHaveLength(cooksBefore + 1);
+    const freshVerifier = host.created.at(-1)!;
+    expect(freshVerifier.labels[TEAM_ROLE_LABEL]).toBe("verifier");
+    expect(freshVerifier.cwd).toBe(integrator.cwd);
+    expect(rechecked.items[rechecked.team.rootItemId].pack.verifiedCommit).toBeUndefined();
+    expect(itemByKey(rechecked, "A").pack.verifiedCommit).toBe(head);
+    await service.report(freshVerifier.id, {
+      outcome: "pass",
+      summary: "Current context independently checked",
+      artifacts: [{ kind: "commit", ref: combinedHead }],
+      criteria: rechecked.items[rechecked.team.rootItemId].acceptanceCriteria.map((criterion) => ({
+        id: criterion.id,
+        met: true,
+        evidence: "Combined HEAD checked against revised requirements",
+      })),
+    });
+    await service.dispatchAll();
+    expect(
+      (await service.status(team.team.id)).state.items[team.team.rootItemId].pack
+        .verifiedNativeContextMessageId,
+    ).toBe("native:revised-requirements");
     await writeFile(join(integrator.cwd, "result.txt"), "Changed after verification");
     await expect(
       service.controlKitchen(team.team.id, "accept", "operator", {
