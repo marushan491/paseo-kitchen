@@ -66,6 +66,7 @@ export function Action<T>({
         borderColor,
         backgroundColor,
         minHeight: touchControls ? 48 : 44,
+        minWidth: touchControls ? 48 : undefined,
         justifyContent: "center" as const,
         flexDirection: "row" as const,
         alignItems: "center" as const,
