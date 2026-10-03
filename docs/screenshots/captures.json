@@ -1,6 +1,6 @@
 {
   "host": "PandaOS",
-  "qa": "Deterministic browser layout checks; actual mission uses free OpenCode Muse. No Jev/paid model calls in these captures. Compact browser screenshots do not establish native Android coverage.",
+  "qa": "Current Team, composer and empty-Kitchen captures: actual owned Mac Electron window, no inference. Earlier mission and assigned-agent captures: free OpenCode Muse. No paid model calls. Compact browser/Electron screenshots do not establish native Android coverage.",
   "screenshots": [
     {
       "file": "overview.png",
@@ -11,17 +11,19 @@
     },
     {
       "file": "kitchen.png",
-      "dimensions": [1440, 900],
-      "sha256": "1295ed1af73cc38fe4ba280d84e849a297ebaff2e4ef7a793bc6521525adfc77",
-      "capturedAt": "2026-10-03T02:15:42.105Z",
-      "evidenceRef": "evidence://wks_51314d22476ca196/evr_425bae72-25ce-47ee-a83c-994d2358d2ab/screenshot"
+      "dimensions": [1642, 1520],
+      "sha256": "354c01c8adf78dd47fb82ff9b83e71eb123bc9d2000e57fc1c5ccbbd40d3efea",
+      "capturedAt": "2026-10-03",
+      "captureMethod": "Actual Mac Electron CDP capture from an owned test window; private sidebar excluded",
+      "inferenceCalls": 0
     },
     {
       "file": "kitchen-empty.png",
-      "dimensions": [1440, 900],
-      "sha256": "247ac718292dc73b21159d1ad6dd1089a15ad22c701c105a58f0959dbfdd9ca7",
-      "capturedAt": "2026-10-03T01:51:47.776Z",
-      "evidenceRef": "evidence://wks_51314d22476ca196/evr_493bf293-1c7a-4bc2-938b-f0ee1347a0e2/screenshot"
+      "dimensions": [1552, 854],
+      "sha256": "c104e4841af7a8f9af8da53b15841456352250c71a2ce3ad5f9540ced92dc99b",
+      "capturedAt": "2026-10-03",
+      "captureMethod": "Actual Mac Electron CDP capture from an owned test window; private sidebar excluded",
+      "inferenceCalls": 0
     },
     {
       "file": "kitchen-agent.png",
@@ -32,10 +34,11 @@
     },
     {
       "file": "kitchen-station.png",
-      "dimensions": [1440, 900],
-      "sha256": "5a130a34af4375696444d15e093908ca2b1c65447503c3c825ccff0db091719e",
-      "capturedAt": "2026-10-03T02:15:45.138Z",
-      "evidenceRef": "evidence://wks_51314d22476ca196/evr_ce1b6c94-eec0-4ad4-a930-95078f32fa59/screenshot"
+      "dimensions": [1642, 1520],
+      "sha256": "43ec4c9261b984933df71d9d4afe72220777dd8fc39f9e35af0ffd61dbcbb593",
+      "capturedAt": "2026-10-03",
+      "captureMethod": "Actual Mac Electron CDP capture from an owned test window; private sidebar excluded",
+      "inferenceCalls": 0
     },
     {
       "file": "missions.png",
@@ -67,31 +70,35 @@
     },
     {
       "file": "roles-workflows.png",
-      "dimensions": [1920, 1080],
-      "sha256": "c1fd91c2675e8f9c99f9c1a78e70d5e2ecb93058163bf798501cff7418625fa6",
-      "capturedAt": "2026-10-03T01:40:00.242Z",
-      "evidenceRef": "evidence://wks_51314d22476ca196/evr_3c719607-4817-468f-9f96-de7bc1e7418c/screenshot"
+      "dimensions": [1628, 1170],
+      "sha256": "2fdd103687e4c83c03adcf1146db234292698503b73952768d0f21b28538b0d5",
+      "capturedAt": "2026-10-03",
+      "captureMethod": "Actual Mac Electron CDP capture from an owned test window; private sidebar excluded",
+      "inferenceCalls": 0
     },
     {
       "file": "workflow-task.png",
-      "dimensions": [1920, 1080],
-      "sha256": "e1eb9d9a814230761e7e8ca90575ec22c378f24c948d2fd679ec7690a0705d99",
-      "capturedAt": "2026-10-03T01:41:03.525Z",
-      "evidenceRef": "evidence://wks_51314d22476ca196/evr_a84bb35b-f9fe-4d91-8cec-26f85a96b0f7/screenshot"
+      "dimensions": [1628, 1170],
+      "sha256": "da18794085abde652951bd96ef70983d20c31045919914dcf62d7622a75d1450",
+      "capturedAt": "2026-10-03",
+      "captureMethod": "Actual Mac Electron CDP capture from an owned test window; private sidebar excluded",
+      "inferenceCalls": 0
     },
     {
       "file": "role-editor.png",
-      "dimensions": [1920, 1080],
-      "sha256": "f0676668f60e86421de179a3f6182ac342770b44e586c883cd10018aa77e2090",
-      "capturedAt": "2026-10-03T01:40:13.046Z",
-      "evidenceRef": "evidence://wks_51314d22476ca196/evr_13ac9061-c369-4c25-b17b-92f99ab8fd81/screenshot"
+      "dimensions": [1628, 1170],
+      "sha256": "0ee12e4388b454c609265538eba8e320afe3e0aa15299a979beb9f2942dbc1e8",
+      "capturedAt": "2026-10-03",
+      "captureMethod": "Actual Mac Electron CDP capture from an owned test window; private sidebar excluded",
+      "inferenceCalls": 0
     },
     {
       "file": "workflow-connection.png",
-      "dimensions": [1920, 1080],
-      "sha256": "191067f90acd92f94022c2022fb3326c85697345cc61812e25215de71db1fbdb",
-      "capturedAt": "2026-10-03T01:42:04.320Z",
-      "evidenceRef": "evidence://wks_51314d22476ca196/evr_fd44b754-542e-4326-a8a6-b6665fc0cafd/screenshot"
+      "dimensions": [1628, 1170],
+      "sha256": "68b7eec9cf1f587b650f2483bc9d87361fabc623b6ec24058fe18959f2ea05ff",
+      "capturedAt": "2026-10-03",
+      "captureMethod": "Actual Mac Electron CDP capture from an owned test window; private sidebar excluded",
+      "inferenceCalls": 0
     },
     {
       "file": "settings.png",
@@ -102,10 +109,11 @@
     },
     {
       "file": "native-composer.png",
-      "dimensions": [1440, 900],
-      "sha256": "61c9a2c2b42fe22390e882dfa5e7781b10bc3df576134bc0bc255b18a5b420f4",
-      "capturedAt": "2026-10-03T01:50:25.223Z",
-      "evidenceRef": "evidence://wks_51314d22476ca196/evr_bdccdb22-0e12-4ba2-850a-f250a5dd3ff4/screenshot"
+      "dimensions": [974, 858],
+      "sha256": "e9488e897703b6ffabab1f89e65230c3f76ede6fe006e9a9b077fce9211feb83",
+      "capturedAt": "2026-10-03",
+      "captureMethod": "Actual Mac Electron CDP capture from an owned test window; private sidebar excluded",
+      "inferenceCalls": 0
     },
     {
       "file": "team-presets.png",
@@ -149,6 +157,14 @@
       "evidenceRef": "Root retained native-initial-chat capture",
       "note": "Shows initial text and persisted mission card; attached image is not visually displayed in this bubble.",
       "captureStatus": "Fresh Root capture after final live QA; copied from the retained original."
+    },
+    {
+      "file": "compact-team-role.png",
+      "dimensions": [430, 914],
+      "sha256": "b1f6f57a91c2d7a74357e0ec576be3f8e8234127ca7b158304c54049a7da1142",
+      "capturedAt": "2026-10-03",
+      "captureMethod": "Actual Mac Electron CDP capture from an owned test window; private sidebar excluded",
+      "inferenceCalls": 0
     }
   ],
   "verifiedHostCore": "ffb79e37c",

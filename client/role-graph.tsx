@@ -1,3 +1,5 @@
+import { Icon } from "@getpaseo/plugin/client/react-native";
+import { kitchenStations, stageForRole } from "./kitchen-stations.js";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useCallback, useMemo, useState, useEffect, useId } from "react";
 import { PanResponder, Pressable, Text, View } from "react-native";
@@ -7,6 +9,7 @@ import { Choice } from "./choice.js";
 import { GraphViewport } from "./graph-viewport.js";
 import {
   clampGraphZoom,
+  graphNodeSize,
   graphConnections,
   layoutRoleGraph,
   updateGraphConnection,
@@ -50,6 +53,7 @@ export function RoleGraph(props: RoleGraphProps) {
   const [zoom, setZoom] = useState(100);
   const [graphScale, setGraphScale] = useState(1);
   const [fitKey, setFitKey] = useState(0);
+  const [arrangeKey, setArrangeKey] = useState(0);
   const [selected, setSelected] = useState<GraphConnection | null>(null);
   const [phaseId, setPhase] = useState("");
   const [positions, setPositions] = useState<Record<string, GraphPoint>>({});
@@ -57,6 +61,18 @@ export function RoleGraph(props: RoleGraphProps) {
   const graph = useMemo(
     () => layoutRoleGraph(props.workflow, board, positions),
     [props.workflow, board, positions],
+  );
+  const statesStyle = useMemo(
+    () => ({
+      position: "absolute" as const,
+      left: 40,
+      top: graph.statesY - 8,
+      width: graph.width - 80,
+      borderTopWidth: 1,
+      borderColor: props.theme.colors.border,
+      paddingTop: 12,
+    }),
+    [graph.statesY, graph.width, props.theme.colors.border],
   );
   useEffect(() => setMode(props.layout.compact ? "list" : "graph"), [props.layout.compact]);
   const chooseMode = useCallback((value: string) => setMode(value), []);
@@ -87,7 +103,7 @@ export function RoleGraph(props: RoleGraphProps) {
   }, []);
   const arrange = useCallback(() => {
     setPositions({});
-    setFitKey((value) => value + 1);
+    setArrangeKey((value) => value + 1);
   }, []);
   const moveNode = useCallback(
     (id: string, point: GraphPoint) => setPositions((old) => ({ ...old, [id]: point })),
@@ -98,7 +114,6 @@ export function RoleGraph(props: RoleGraphProps) {
     setPositions({});
     setSelected(null);
     setPhase("");
-    setFitKey((key) => key + 1);
   }, []);
   const options = useMemo(() => boards.map((id) => ({ id, title: boardTitle(id) })), [boards]);
   return (
@@ -188,8 +203,15 @@ export function RoleGraph(props: RoleGraphProps) {
             zoom={zoom}
             onZoom={setZoom}
             fitKey={fitKey}
+            viewKey={`${board}:${arrangeKey}`}
+            focus={graph.focus}
             onScale={setGraphScale}
           >
+            {graph.statesY ? (
+              <View style={statesStyle}>
+                <Text style={styles.muted}>Other workflow states</Text>
+              </View>
+            ) : null}
             {graph.routes.map((route) => (
               <ConnectionPath key={route.edge.id} {...props} route={route} onInspect={inspect} />
             ))}
@@ -206,8 +228,8 @@ export function RoleGraph(props: RoleGraphProps) {
             ))}
           </GraphViewport>
           <Text style={styles.muted}>
-            Drag the background to pan. Pinch or use zoom to inspect. Return paths run below the
-            forward flow.
+            Scroll or pinch to zoom. Drag the background to pan. Red routes return work for
+            corrections. Fit includes every workflow state.
           </Text>
         </>
       ) : (
@@ -276,43 +298,115 @@ function PhaseNode(
   const role = node.phase.role ? props.workflow.roles[node.phase.role] : undefined;
   const name =
     node.phase.role === props.selectedRole && props.roleName ? props.roleName : role?.title;
-  const card = useMemo(
-    () => ({
-      position: "absolute" as const,
-      left: node.x,
-      top: node.y,
-      width: 200,
-      height: 94,
-      padding: 14,
-      gap: 8,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor:
-        props.selectedRole && props.selectedRole === node.phase.role
-          ? props.theme.colors.accent
-          : props.theme.colors.border,
-      backgroundColor: props.theme.colors.surface1,
-    }),
-    [node, props.selectedRole, props.theme],
-  );
+  const presentation = phasePresentation(props, node);
+  const nodeStyles = useMemo(() => {
+    let borderColor = node.phase.role ? presentation.color : props.theme.colors.border;
+    if (props.selectedRole === node.phase.role && props.selectedRole)
+      borderColor = props.theme.colors.accent;
+    return {
+      card: {
+        position: "absolute" as const,
+        left: node.x,
+        top: node.y,
+        width: graphNodeSize.width,
+        height: graphNodeSize.height,
+        padding: 14,
+        paddingTop: 16,
+        gap: 6,
+        overflow: "hidden" as const,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor,
+        backgroundColor: node.phase.role
+          ? props.theme.colors.surface1
+          : props.theme.colors.surface0,
+      },
+      tint: {
+        position: "absolute" as const,
+        left: 0,
+        right: 0,
+        top: 0,
+        bottom: 0,
+        backgroundColor: presentation.color,
+        opacity: 0.12,
+      },
+      stripe: {
+        position: "absolute" as const,
+        left: 0,
+        right: 0,
+        top: 0,
+        height: 5,
+        backgroundColor: presentation.color,
+      },
+      row: { flexDirection: "row" as const, alignItems: "center" as const, gap: 10 },
+      title: {
+        color: props.theme.colors.foreground,
+        fontSize: 16,
+        lineHeight: 21,
+        fontWeight: "700" as const,
+        flex: 1,
+      },
+      purpose: { color: props.theme.colors.foreground, fontSize: 13, lineHeight: 17 },
+      role: { color: props.theme.colors.foregroundMuted, fontSize: 11, lineHeight: 14 },
+      initial: { color: props.theme.colors.foregroundMuted, fontSize: 11 },
+    };
+  }, [node, props.selectedRole, props.theme, presentation.color]);
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`Workflow phase ${node.phase.title}${name ? `, ${name}` : ""}`}
       nativeID={nativeId}
       onPress={select}
-      style={card}
+      style={nodeStyles.card}
       {...drag.panHandlers}
     >
-      <Text style={styles.heading} numberOfLines={1}>
-        {node.phase.title}
-      </Text>
-      <Text style={styles.muted} numberOfLines={2}>
+      {node.phase.role ? <View pointerEvents="none" style={nodeStyles.tint} /> : null}
+      {node.phase.role ? <View pointerEvents="none" style={nodeStyles.stripe} /> : null}
+      <View style={nodeStyles.row}>
+        <Icon name={presentation.icon} size={20} color={presentation.color} />
+        <Text style={nodeStyles.title} numberOfLines={2}>
+          {presentation.title}
+        </Text>
+      </View>
+      {presentation.purpose ? <Text style={nodeStyles.purpose}>{presentation.purpose}</Text> : null}
+      <Text style={node.phase.role ? nodeStyles.role : styles.muted} numberOfLines={2}>
         {name || phasePurpose(node.phase)}
       </Text>
-      {props.initial ? <Text style={styles.muted}>Start here</Text> : null}
+      {props.initial ? <Text style={nodeStyles.initial}>Start here</Text> : null}
     </Pressable>
   );
+}
+function phasePresentation(props: RoleGraphProps, node: GraphNode) {
+  const colors = props.theme.colors;
+  if (!node.phase.role)
+    return {
+      title: node.phase.title,
+      icon: node.phase.kind === "terminal" ? "ShieldCheck" : "GitBranch",
+      color: colors.foregroundMuted,
+    };
+  const stage = stageForRole(
+    node.phase.role,
+    node.id,
+    props.workflow.boards.root?.phases[node.id] === node.phase,
+  );
+  const station = kitchenStations.find((value) => value.id === stage);
+  const icons: Record<string, string> = {
+    plan: "ClipboardList",
+    build: "Code2",
+    review: "SearchCheck",
+    verify: "ShieldCheck",
+    integrate: "GitMerge",
+    final: "BadgeCheck",
+  };
+  let color = colors.accent;
+  if (stage === "plan" || stage === "review") color = colors.statusWarning;
+  if (stage === "verify" || stage === "final") color = colors.statusSuccess;
+  return {
+    title: stage === "head" ? node.phase.title : station!.title,
+    purpose: stage === "head" ? undefined : station!.purpose,
+    icon: icons[stage] || "Workflow",
+    color,
+  };
 }
 function phasePurpose(phase: GraphPhase) {
   if (phase.completeWithChildren) return "Wait for verified scoped work";
@@ -338,11 +432,20 @@ function ConnectionPath(
       paddingVertical: 8,
       borderRadius: 8,
       borderWidth: 1,
-      borderColor: props.theme.colors.border,
+      borderColor: route.returning ? props.theme.colors.statusDanger : props.theme.colors.border,
       backgroundColor: props.theme.colors.surface0,
       justifyContent: "center" as const,
     }),
-    [route.label, props.theme],
+    [route.label, route.returning, props.theme],
+  );
+  const labelText = useMemo(
+    () => ({
+      ...styles.text,
+      color: route.returning ? props.theme.colors.statusDanger : props.theme.colors.foreground,
+      fontWeight: "600" as const,
+      fontSize: 13,
+    }),
+    [styles.text, route.returning, props.theme],
   );
   const segments = route.points
     .slice(1)
@@ -357,6 +460,7 @@ function ConnectionPath(
             from={segment.from}
             to={segment.to}
             terminal={index === segments.length - 1}
+            returning={route.returning}
           />
         ))}
       </View>
@@ -367,7 +471,7 @@ function ConnectionPath(
         nativeID={nativeId}
         style={label}
       >
-        <Text style={styles.text}>
+        <Text style={labelText}>
           {route.edge.label}
           {route.returning ? " ↩" : " →"}
         </Text>
@@ -376,7 +480,12 @@ function ConnectionPath(
   );
 }
 function RouteSegment(
-  props: PluginSurfaceProps & { from: GraphPoint; to: GraphPoint; terminal: boolean },
+  props: PluginSurfaceProps & {
+    from: GraphPoint;
+    to: GraphPoint;
+    terminal: boolean;
+    returning: boolean;
+  },
 ) {
   const styles = useMemo(() => {
     const dx = props.to.x - props.from.x,
@@ -390,19 +499,21 @@ function RouteSegment(
         top: (props.from.y + props.to.y) / 2 - 1,
         width: length,
         height: 2,
-        backgroundColor: props.theme.colors.border,
+        backgroundColor: props.returning
+          ? props.theme.colors.statusDanger
+          : props.theme.colors.accent,
         transform: [{ rotate: `${angle}rad` }],
       },
       arrow: {
         position: "absolute" as const,
         left: props.to.x - 9,
         top: props.to.y - 13,
-        color: props.theme.colors.foregroundMuted,
+        color: props.returning ? props.theme.colors.statusDanger : props.theme.colors.accent,
         fontSize: 22,
         transform: [{ rotate: `${angle}rad` }],
       },
     };
-  }, [props.from, props.to, props.theme]);
+  }, [props.from, props.to, props.theme, props.returning]);
   return (
     <>
       <View style={styles.line} />

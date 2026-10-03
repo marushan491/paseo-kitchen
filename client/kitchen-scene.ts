@@ -4,10 +4,10 @@ import {
   CylinderGeometry,
   Group,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
+  PlaneGeometry,
   SphereGeometry,
-  Sprite,
-  SpriteMaterial,
 } from "three";
 import { kitchenStations } from "./kitchen-stations.js";
 import type { OfficePalette } from "./web.js";
@@ -70,29 +70,25 @@ function sphere(group: Group, color: string, radius: number, x: number, y: numbe
   group.add(mesh);
   return mesh;
 }
-function label(group: Group, title: string, subtitle: string, palette: OfficePalette) {
+function label(group: Group, title: string, palette: OfficePalette) {
   const canvas = document.createElement("canvas");
   canvas.width = 640;
-  canvas.height = 160;
+  canvas.height = 128;
   const context = canvas.getContext("2d");
   if (!context) return;
   context.fillStyle = palette.background;
-  context.fillRect(0, 0, 640, 160);
+  context.fillRect(0, 0, 640, 128);
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.fillStyle = palette.foreground;
   context.font = "600 64px sans-serif";
-  context.fillText(title, 320, 55);
-  context.fillStyle = palette.muted;
-  context.font = "40px sans-serif";
-  context.fillText(subtitle, 320, 110);
+  context.fillText(title, 320, 64);
   const texture = new CanvasTexture(
     canvas as unknown as ConstructorParameters<typeof CanvasTexture>[0],
   );
-  const sprite = new Sprite(new SpriteMaterial({ map: texture, depthTest: false }));
-  sprite.position.set(0, 0.1, 2);
-  sprite.scale.set(4, 1, 1);
-  group.add(sprite);
+  const sign = new Mesh(new PlaneGeometry(2.25, 0.45), new MeshBasicMaterial({ map: texture }));
+  sign.position.set(0, 0.48, 0.82);
+  group.add(sign);
 }
 export function createKitchen(palette: OfficePalette) {
   const room = new Group();
@@ -131,11 +127,8 @@ export function createKitchen(palette: OfficePalette) {
       kitchenBox(island, "#adb1b2", [0.36, 0.04, 0.06], [doorX, 0.84, 0.8], 0.7);
     }
     stationTools(island, station.id, palette);
-    label(island, station.title, station.purpose, palette);
+    label(island, station.title, palette);
   }
-  plant(room, -6, 0, -4);
-  plant(room, 6.3, 0, -5.9);
-  plant(room, -6, 0, 6.8);
   return { room, stations };
 }
 function stationTools(group: Group, id: string, palette: OfficePalette) {
@@ -164,12 +157,6 @@ function stationTools(group: Group, id: string, palette: OfficePalette) {
   }
   kitchenBox(group, palette.background, [0.85, 0.7, 0.08], [0.5, 1.68, -0.82]);
   kitchenBox(group, palette.accent, [0.7, 0.52, 0.02], [0.5, 1.7, -0.76]);
-  plant(group, -0.9, 1.24, -0.56);
-}
-function plant(group: Group, x: number, y: number, z: number) {
-  cylinder(group, "#b9aaa0", 0.16, 0.25, x, y + 0.13, z);
-  sphere(group, "#637a50", 0.21, x, y + 0.44, z);
-  sphere(group, "#768a58", 0.16, x + 0.12, y + 0.56, z);
 }
 export function createPanda(color: string) {
   const panda = new Group();
@@ -195,10 +182,10 @@ export function createPanda(color: string) {
 export function disposeKitchen(group: Group) {
   group.traverse((object) => {
     if (object instanceof Mesh) object.geometry.dispose();
-    if (object instanceof Mesh || object instanceof Sprite) {
+    if (object instanceof Mesh) {
       const materials = Array.isArray(object.material) ? object.material : [object.material];
       for (const material of materials) {
-        if (material instanceof SpriteMaterial) material.map?.dispose();
+        if (material instanceof MeshBasicMaterial) material.map?.dispose();
         material.dispose();
       }
     }

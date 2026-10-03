@@ -73,7 +73,7 @@ The built-in Standard team has no implicit token, cost, active-time, delegation-
 
 ## Screens and navigation
 
-The Studio has one project selector. Choose **All projects** to see this host's missions across projects. Screenshots below show the verified interface in an isolated demo project. The live mission used free OpenCode Muse; deterministic layout checks did not call Jev or a paid model. A screenshot records an observed state and does not prove current agent activity.
+The Studio has one project selector. Choose **All projects** to see this host's missions across projects. The Team, composer and empty-Kitchen screenshots show the current interface verified in Mac Electron. Mission and assigned-agent examples retain the earlier free OpenCode Muse run; their capture dates are recorded below. Layout checks made no model calls. A screenshot records an observed state and does not prove current agent activity.
 
 | Screen       | What you do here                                                                                                                                                        |
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -99,22 +99,22 @@ Open a question to answer it, or review the result before acceptance. Snooze hid
 
 Use **Map** to see the Kitchen, or **List** (**Stages** on compact layouts) for role cards. Desktop and browser use the procedural Three.js scene. Native clients and hosts without WebGL use the native map; the stage list remains available. Zoom and **Fit** control the viewport.
 
-Stations stay visible in an empty Kitchen. Agents appear only for actual mission bindings. Drag the background to pan; the wheel, zoom controls and **Fit** adjust the viewport. Select a chef or station to open the desktop inspector; compact layouts use a bottom sheet. It shows the real assignment, available provider/model information, recorded activity and **Open agent**, **Open mission** or **Configure role** actions. Missing snapshots are marked unobserved. Waiting for provider capacity does not appear as productive work; the scene invents neither usage nor background traffic.
+Stations stay visible in an empty Kitchen. Small cabinet plaques name each station; panda chefs appear only for actual mission bindings. Drag the background to pan; the wheel, zoom controls and **Fit** adjust the viewport. Select a chef or station to open the desktop inspector; compact layouts use a bottom sheet. It shows the real assignment, available provider/model information, recorded activity and **Open agent**, **Open mission** or **Configure role** actions. Missing snapshots are marked unobserved. Waiting for provider capacity does not appear as productive work; the scene invents neither usage nor background traffic.
 
 <details>
 <summary>Station, agent and empty-Kitchen examples</summary>
 
 ![Actual Head Chef assignment and available actions](docs/screenshots/kitchen-agent.png)
 
-The selected agent shows its actual free OpenCode model and idle state. **Open agent** returns to its conversation; **Open mission** opens the persisted work; **Configure role** affects its next new role binding.
+This earlier mission capture shows the selected agent's actual free OpenCode model and idle state. **Open agent** returns to its conversation; **Open mission** opens the persisted work; **Configure role** affects its next new role binding.
 
-![Review station without an assigned agent](docs/screenshots/kitchen-station.png)
+![Plan station without an assigned agent](docs/screenshots/kitchen-station.png)
 
-The Review station explains its purpose and says **No agent assigned** when no Cook is there.
+The Plan station explains its purpose and says **No agent assigned** when no Cook is there.
 
-![Empty Kitchen for an existing project](docs/screenshots/kitchen-empty.png)
+![Empty Kitchen with labels attached to its cabinets](docs/screenshots/kitchen-empty.png)
 
-An existing project with no mission shows **Ready to cook** and retains its stations. **Start mission** opens the native composer.
+The empty scene retains its stations without showing fictional agents. **Start mission** opens the native composer.
 
 </details>
 
@@ -148,7 +148,9 @@ A **team preset** selects how a mission executes. A **workflow pack** is its tec
 
 Select a baseline or saved team in the editor. Select a role to edit its responsibility, instructions, installed skill names and optional provider/model settings. **Head Chef preferences** configures the ordinary coordinating session for new missions using that team. Select a connection to inspect its actual outcome and target, change its draft target or restore the inherited return limit. **Save changes** validates and persists a new revision. Existing missions keep their executed snapshot.
 
-Choose the **Work board** you want to edit. **Mission plan and integration** coordinates planning, combined integration and final verification. **Task build and verification** controls each individual task's Build, Review and Verify path. **Graph** shows the actual handoffs; **List** provides the same stages and connections in a compact layout. Selecting a role or connection opens its editor. **1:1** uses actual size; **Fit** shows the whole workflow. Drag the graph background to pan, or use zoom controls to inspect a handoff.
+Choose the **Work board** you want to edit. **Mission plan and integration** coordinates planning, combined integration and final verification. **Task build and verification** controls each individual task's Build, Review and Verify path. Role cards show the stage's purpose and actual role name. Red return routes send work back for corrections. Other workflow states sit below the working path.
+
+**Graph** opens at a readable scale focused on the working path and its return routes. **Fit** includes every workflow state; **1:1** restores actual size. Scroll or pinch to zoom around the pointer, drag the background to pan, or use Shift-scroll for horizontal movement. With the canvas focused, use **+**, **−**, **0**, **F** and the arrow keys. **List** shows the same stages and connections and is the compact default. Select a role or connection to open its editor.
 
 Custom executable variants use the verified Standard or Single baseline. The runtime preserves the final integration/verification/acceptance path and independent Verifier policy. You can customize the Verifier's title, instructions and skills while its workspace, tools and read-only policy remain protected. Every successful item path still requires Review and independent verification.
 
@@ -186,6 +188,10 @@ These are real 390-pixel browser captures. They verify the compact layout, rathe
 | Stages                                                                               | Map                                                                                               | Agent inspector                                                                              | Team preset sheet                                                                                                      |
 | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | <img src="docs/screenshots/mobile-stages.png" alt="Compact stage cards" width="240"> | <img src="docs/screenshots/mobile-map.png" alt="Compact Kitchen map after scrolling" width="240"> | <img src="docs/screenshots/mobile-agent.png" alt="Actual agent inspector sheet" width="240"> | <img src="docs/screenshots/mobile-presets.png" alt="Native preset sheet with visible Manage teams action" width="240"> |
+
+The current Team editor was also checked in an actual 430-pixel Mac Electron window: List opens by default, the optional graph responds to wheel zoom, and selecting a role opens this sheet. Native Android touch gestures require a separate device check.
+
+<img src="docs/screenshots/compact-team-role.png" alt="Compact role editor with responsibility, inherited model, skills and communication settings" width="320">
 
 Capture identities and image hashes are retained in [the screenshot receipts](docs/screenshots/captures.json).
 
