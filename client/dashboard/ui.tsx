@@ -1,6 +1,6 @@
 import type { PluginHostProps } from "@getpaseo/plugin/client";
 import { useCallback, useMemo, useId } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { Pressable, Text, TextInput, View, useWindowDimensions } from "react-native";
 
 export function Action<T>({
   theme,
@@ -22,13 +22,16 @@ export function Action<T>({
   compact?: boolean;
 }) {
   const nativeId = useId();
+  const { width } = useWindowDimensions();
+  const touchControls = width < 768;
   const press = useCallback(() => onAction(value), [onAction, value]);
   const accessibilityState = useMemo(() => ({ disabled, selected }), [disabled, selected]);
   const passiveBackground = selected ? theme.colors.surface2 : "transparent";
   const styles = useMemo(
     () => ({
       button: {
-        minHeight: 40,
+        minHeight: touchControls ? 48 : 40,
+        minWidth: touchControls ? 48 : undefined,
         justifyContent: "center" as const,
         paddingVertical: compact ? 6 : 9,
         paddingHorizontal: compact ? 10 : 12,
@@ -48,7 +51,7 @@ export function Action<T>({
         fontWeight: "600" as const,
       },
     }),
-    [theme, disabled, variant, selected, compact, passiveBackground],
+    [theme, disabled, variant, selected, compact, passiveBackground, touchControls],
   );
   return (
     <Pressable
