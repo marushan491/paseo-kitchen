@@ -4,7 +4,7 @@ import {
   usePaseo,
   useRpc,
 } from "@getpaseo/plugin/client";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { ScrollView, Text, View } from "react-native";
 import type { z } from "zod";
@@ -45,6 +45,15 @@ interface StudioProps
   extends PluginSurfaceProps, Partial<Pick<PluginAgentPanelProps, "workspaceId" | "agentId">> {
   params?: Record<string, string>;
 }
+interface StudioView {
+  routeTeamId: string;
+  routeSection: string;
+  section: Section;
+  project: string;
+  selectedTeam: string;
+  selectedAgent: string;
+  selectedStation: string | null;
+}
 
 export function Studio(props: StudioProps) {
   const theme = useMemo(() => {
@@ -74,17 +83,54 @@ export function Studio(props: StudioProps) {
 function StudioContent(props: StudioProps) {
   const styles = useFactoryStyles(props);
   const paseo = usePaseo();
-  const [section, setSection] = useState<Section>("Overview");
-  const [project, setProject] = useState("");
-  const [selectedTeam, setSelectedTeam] = useState(props.params?.teamId || "");
+  const cache = useQueryClient();
+  const viewKey = useMemo(
+    () => ["factory", "studio-view", props.host.id, props.workspaceId || "", props.agentId || ""],
+    [props.host.id, props.workspaceId, props.agentId],
+  );
+  const routeTeamId = props.params?.teamId || "";
+  const routeSection = props.params?.section || "";
+  const initialSection = sections.includes(routeSection as Section)
+    ? (routeSection as Section)
+    : "Overview";
+  const { data: view } = useQuery<StudioView>({
+    queryKey: viewKey,
+    enabled: false,
+    initialData: {
+      routeTeamId,
+      routeSection,
+      section: routeTeamId ? "Missions" : initialSection,
+      project: "",
+      selectedTeam: routeTeamId,
+      selectedAgent: "",
+      selectedStation: null,
+    },
+  });
+  const updateView = useCallback(
+    (patch: Partial<StudioView>) =>
+      cache.setQueryData<StudioView>(viewKey, (previous) =>
+        previous ? { ...previous, ...patch } : previous,
+      ),
+    [cache, viewKey],
+  );
+  const { section, project, selectedTeam, selectedAgent, selectedStation } = view;
   useEffect(() => {
-    if (props.params?.teamId) {
-      setSelectedTeam(props.params.teamId);
-      setSection("Missions");
-    } else if (props.params?.section && sections.includes(props.params.section as Section))
-      setSection(props.params.section as Section);
-  }, [props.params]);
-  const [selectedAgent, setSelectedAgent] = useState("");
+    if (view.routeTeamId === routeTeamId && view.routeSection === routeSection) return;
+    const patch: Partial<StudioView> = { routeTeamId, routeSection };
+    if (routeTeamId) {
+      patch.selectedTeam = routeTeamId;
+      patch.section = "Missions";
+    } else if (sections.includes(routeSection as Section)) patch.section = routeSection as Section;
+    updateView(patch);
+  }, [routeTeamId, routeSection, view.routeTeamId, view.routeSection, updateView]);
+  const setSelectedAgent = useCallback(
+    (value: string) => updateView({ selectedAgent: value }),
+    [updateView],
+  );
+  const setSelectedStation = useCallback(
+    (value: string | null) => updateView({ selectedStation: value }),
+    [updateView],
+  );
   const list = useRpc(factoryList);
   const packsRpc = useRpc(factoryPacks);
   const teams = useQuery({
@@ -115,10 +161,10 @@ function StudioContent(props: StudioProps) {
     () => findBinding(visibleTeams, selectedAgent),
     [visibleTeams, selectedAgent],
   );
-  const openTeam = useCallback((id: string) => {
-    setSelectedTeam(id);
-    setSection("Missions");
-  }, []);
+  const openTeam = useCallback(
+    (id: string) => updateView({ selectedTeam: id, section: "Missions" }),
+    [updateView],
+  );
   const nativeNavigation = props.navigation as NativeNavigation | undefined;
   const nativeReady = Boolean(nativeNavigation?.openNewWorkspace);
   const newMission = useCallback(() => {
@@ -131,21 +177,21 @@ function StudioContent(props: StudioProps) {
     });
   }, [nativeNavigation, project, projects.data, props.host.id]);
   const startAction = nativeReady ? newMission : undefined;
-  const selectSection = useCallback((value: Section) => {
-    setSection(value);
-    setSelectedAgent("");
-  }, []);
-  const chooseProject = useCallback((value: string) => {
-    setProject(value);
-    setSelectedTeam("");
-    setSelectedAgent("");
-  }, []);
+  const selectSection = useCallback(
+    (value: Section) => updateView({ section: value, selectedAgent: "" }),
+    [updateView],
+  );
+  const chooseProject = useCallback(
+    (value: string) =>
+      updateView({ project: value, selectedTeam: "", selectedAgent: "", selectedStation: null }),
+    [updateView],
+  );
   const teamNavigation = useCallback(
     (teamId?: string) => {
       if (teamId) openTeam(teamId);
-      else setSection("Missions");
+      else updateView({ section: "Missions" });
     },
-    [openTeam],
+    [openTeam, updateView],
   );
   return (
     <View style={styles.screen}>
@@ -239,6 +285,8 @@ function StudioContent(props: StudioProps) {
           error={teams.error}
           project={project}
           configured={configured}
+          selectedStation={selectedStation}
+          onSelectStation={setSelectedStation}
           onOpen={openTeam}
           onConfigure={setSelectedAgent}
           onNew={startAction}
@@ -320,6 +368,8 @@ function KitchenScene(
     error: unknown;
     project: string;
     configured: ReturnType<typeof findBinding>;
+    selectedStation: string | null;
+    onSelectStation(id: string | null): void;
     onOpen(id: string): void;
     onConfigure(id: string): void;
     onNew?: () => void;
@@ -336,6 +386,8 @@ function KitchenScene(
       {props.error ? <Text style={styles.danger}>{String(props.error)}</Text> : null}
       <Office
         {...props}
+        selected={props.selectedStation}
+        onSelect={props.onSelectStation}
         teams={props.teams}
         packs={props.packs?.packs || emptyPacks}
         onOpenTeam={props.onOpen}

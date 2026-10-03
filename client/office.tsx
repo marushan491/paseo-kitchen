@@ -23,6 +23,8 @@ import { stageForRole } from "./kitchen-stations.js";
 
 export type OfficeProps = PluginSurfaceProps & {
   teams: TeamState[];
+  selected: string | null;
+  onSelect(value: string | null): void;
   onOpenTeam(teamId: string): void;
   onConfigureAgent?(agentId: string): void;
   onNewMission?(): void;
@@ -38,12 +40,14 @@ export function Office(props: OfficeProps) {
   );
   const stages = useMemo(
     () =>
-      props.teams.flatMap((state) =>
-        missionStages(state, missionWorkflowFor(state, props.packs || []), observed.agents),
-      ),
+      props.teams
+        .filter((state) => state.team.status !== "done" && state.team.status !== "canceled")
+        .flatMap((state) =>
+          missionStages(state, missionWorkflowFor(state, props.packs || []), observed.agents),
+        ),
     [props.teams, props.packs, observed.agents],
   );
-  const [selected, setSelected] = useState<string | null>(null);
+  const { selected, onSelect: setSelected } = props;
   const [mode, setMode] = useState<"map" | "list">(props.layout.compact ? "list" : "map");
   const chooseMode = useCallback((value: string) => setMode(value === "map" ? "map" : "list"), []);
   useEffect(() => setMode(props.layout.compact ? "list" : "map"), [props.layout.compact]);
@@ -83,7 +87,7 @@ export function Office(props: OfficeProps) {
       mounted.renderer.dispose();
       renderer.current = null;
     };
-  }, [mode, palette, unavailable]);
+  }, [mode, palette, unavailable, setSelected]);
   useEffect(
     () => renderer.current?.update(desks, selected, palette),
     [desks, selected, palette, mode],
@@ -101,14 +105,14 @@ export function Office(props: OfficeProps) {
     setFitKey((value) => value + 1);
     renderer.current?.fit();
   }, []);
-  const dismiss = useCallback(() => setSelected(null), []);
+  const dismiss = useCallback(() => setSelected(null), [setSelected]);
   useEffect(() => {
     if (
       selected?.startsWith("agent:") &&
       !desks.some((desk) => `agent:${desk.agentId}` === selected)
     )
       setSelected(null);
-  }, [selected, desks]);
+  }, [selected, desks, setSelected]);
   const canvasStyle = useMemo(
     () => ({
       height: fallback ? 0 : canvasHeight(props.layout.compact, viewport.height),
