@@ -2,9 +2,10 @@ import { expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PaseoApi, PaseoAgentCreateOptions } from "@getpaseo/client";
+import type { PaseoApi, PaseoAgentConfig, PaseoAgentCreateOptions } from "@getpaseo/client";
 import { sdkController } from "./controller.js";
 import { createHostControl } from "./host-control.js";
+import { kitchenPermissionConfig } from "./permission-config.js";
 
 it("passes provider/model, creation identity and worktree through the public SDK", async () => {
   const calls: PaseoAgentCreateOptions[] = [];
@@ -70,6 +71,256 @@ it("uses only an explicitly advertised provider default when no model was select
   });
   expect(calls[0]!.config.provider).toBe("custom-profile/raw/model-id");
 });
+
+it("leaves explicit permission settings intact when Kitchen auto-accept is disabled", async () => {
+  const config: PaseoAgentConfig = {
+    provider: "opencode/opencode/free-test-model",
+    modeId: "plan",
+    thinkingOptionId: "high",
+    featureValues: { auto_accept: false, custom: true },
+    options: { permission: { edit: "deny" } },
+  };
+  const api = { providers: {} } as unknown as PaseoApi;
+  expect(await kitchenPermissionConfig(api, config, "/repo", false)).toBe(config);
+});
+
+it("starts an OpenCode Cook in Build with the advertised auto-accept toggle", async () => {
+  const create = vi.fn(async () => ({ id: "worker" }));
+  const listModes = vi.fn(async () => ({ modes: [{ id: "build", label: "Build" }] }));
+  const listFeatures = vi.fn(async () => ({
+    features: [{ id: "auto_accept", type: "toggle", label: "Auto-accept", value: false }],
+  }));
+  const api = {
+    providers: { listModes, listFeatures },
+    agents: { create },
+  } as unknown as PaseoApi;
+  await sdkController(api).create({
+    provider: "opencode/opencode/free-test-model",
+    title: "Developer",
+    cwd: "/repo",
+    initialPrompt: "Do the work",
+    mode: "build",
+    thinking: "high",
+    autoAcceptPermissions: true,
+    decisionId: "decision",
+    labels: { role: "developer" },
+  });
+  expect(listModes).toHaveBeenCalledWith("opencode", { cwd: "/repo" });
+  expect(listFeatures).toHaveBeenCalledWith({
+    provider: "opencode/opencode/free-test-model",
+    cwd: "/repo",
+    modeId: "build",
+    thinkingOptionId: "high",
+    featureValues: undefined,
+  });
+  expect(create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      idempotencyKey: "decision",
+      prompt: "Do the work",
+      labels: { role: "developer" },
+      config: {
+        provider: "opencode/opencode/free-test-model",
+        modeId: "build",
+        thinkingOptionId: "high",
+        featureValues: { auto_accept: true },
+      },
+    }),
+  );
+});
+
+it.each(["opencode", "opencode-profile"])(
+  "preserves a custom %s mode and existing features when enabling auto-accept",
+  async (provider) => {
+    const config: PaseoAgentConfig = {
+      provider: `${provider}/opencode/free-test-model`,
+      modeId: "security-audit",
+      thinkingOptionId: "high",
+      featureValues: { auto_accept: false, another: "selected" },
+      systemPrompt: "Audit carefully",
+      toolPolicy: { preapproved: [{ server: "factory", tool: "report" }] },
+    };
+    const api = {
+      providers: {
+        listModes: async () => ({ modes: [{ id: "security-audit", label: "Security audit" }] }),
+        listFeatures: async () => ({ features: [{ id: "auto_accept", type: "toggle" }] }),
+      },
+    } as unknown as PaseoApi;
+    expect(await kitchenPermissionConfig(api, config, "/repo", true)).toEqual({
+      ...config,
+      featureValues: { auto_accept: true, another: "selected" },
+    });
+    expect(config.featureValues?.auto_accept).toBe(false);
+  },
+);
+
+it.each([
+  ["codex", "full-access"],
+  ["codex-plus", "full-access"],
+  ["codex-business", "full-access"],
+  ["claude", "bypassPermissions"],
+  ["copilot", "allow-all"],
+  ["omp", "full"],
+])("selects only an advertised unattended mode for %s", async (provider, modeId) => {
+  const config: PaseoAgentConfig = {
+    provider: `${provider}/test-model`,
+    modeId: "plan",
+    thinkingOptionId: "high",
+  };
+  const api = {
+    providers: {
+      listModes: async () => ({ modes: [{ id: "plan" }, { id: modeId }] }),
+      listFeatures: async () => ({ features: [] }),
+    },
+  } as unknown as PaseoApi;
+  expect(await kitchenPermissionConfig(api, config, "/repo", true)).toEqual({ ...config, modeId });
+});
+
+it("accepts a custom provider's explicitly advertised unattended mode", async () => {
+  const config: PaseoAgentConfig = { provider: "custom-profile/test-model", modeId: "ask" };
+  const api = {
+    providers: {
+      listModes: async () => ({ modes: [{ id: "run-tools", isUnattended: true }] }),
+      listFeatures: async () => ({ features: [] }),
+    },
+  } as unknown as PaseoApi;
+  expect(await kitchenPermissionConfig(api, config, "/repo", true)).toEqual({
+    ...config,
+    modeId: "run-tools",
+  });
+});
+
+it.each(["codex", "codex-plus"])(
+  "honors an advertised override that makes %s full-access interactive",
+  async (provider) => {
+    const api = {
+      providers: {
+        listModes: async () => ({ modes: [{ id: "full-access", isUnattended: false }] }),
+        listFeatures: async () => ({ features: [] }),
+      },
+    } as unknown as PaseoApi;
+    await expect(
+      kitchenPermissionConfig(api, { provider: `${provider}/test-model` }, "/repo", true),
+    ).rejects.toThrow("no supported unattended mode or auto-accept toggle was advertised");
+  },
+);
+
+it("does not infer a built-in provider's permission contract from another provider's mode IDs", async () => {
+  const api = {
+    providers: {
+      listModes: async () => ({ modes: [{ id: "full-access" }] }),
+      listFeatures: async () => ({ features: [] }),
+    },
+  } as unknown as PaseoApi;
+  await expect(
+    kitchenPermissionConfig(api, { provider: "opencode/opencode/free-test-model" }, "/repo", true),
+  ).rejects.toThrow("no supported unattended mode or auto-accept toggle was advertised");
+});
+
+it.each([
+  ["codex", "on-request"],
+  ["codex-plus", { granular: { sandbox_approval: true } }],
+])(
+  "clears conflicting Codex permission overrides for %s while retaining other options",
+  async (provider, approval) => {
+    const config: PaseoAgentConfig = {
+      provider: `${provider}/test-model`,
+      modeId: "auto",
+      thinkingOptionId: "high",
+      options: {
+        approval_policy: approval,
+        sandbox_mode: "workspace-write",
+        sandbox_workspace_write: { writable_roots: ["/repo"], network_access: false },
+        web_search: "cached",
+        features: { multi_agent_v2: true },
+      },
+    };
+    const api = {
+      providers: {
+        listModes: async () => ({ modes: [{ id: "full-access" }] }),
+        listFeatures: async () => ({ features: [] }),
+      },
+    } as unknown as PaseoApi;
+    expect(await kitchenPermissionConfig(api, config, "/repo", true)).toEqual({
+      ...config,
+      modeId: "full-access",
+      options: {
+        sandbox_workspace_write: { writable_roots: ["/repo"], network_access: false },
+        web_search: "cached",
+        features: { multi_agent_v2: true },
+      },
+    });
+    expect(config.options?.approval_policy).toEqual(approval);
+    expect(config.options?.sandbox_mode).toBe("workspace-write");
+    expect(await kitchenPermissionConfig(api, config, "/repo", false)).toBe(config);
+  },
+);
+
+it("retains tool restrictions when enabling a provider's unattended mode", async () => {
+  const config: PaseoAgentConfig = {
+    provider: "claude/test-model",
+    modeId: "default",
+    options: {
+      disallowedTools: ["Write"],
+      settings: { permissions: { deny: ["Bash(rm *)"] } },
+      additionalDirectories: ["/docs"],
+    },
+    toolPolicy: { preapproved: [{ server: "factory", tool: "report" }] },
+  };
+  const api = {
+    providers: {
+      listModes: async () => ({ modes: [{ id: "bypassPermissions" }] }),
+      listFeatures: async () => ({ features: [] }),
+    },
+  } as unknown as PaseoApi;
+  expect(await kitchenPermissionConfig(api, config, "/repo", true)).toEqual({
+    ...config,
+    modeId: "bypassPermissions",
+  });
+});
+
+it("refuses startup when the provider does not advertise a supported auto-accept choice", async () => {
+  const create = vi.fn();
+  const api = {
+    providers: {
+      listModes: async () => ({ modes: [{ id: "default" }] }),
+      listFeatures: async () => ({ features: [{ id: "auto_accept", type: "select" }] }),
+    },
+    agents: { create },
+  } as unknown as PaseoApi;
+  await expect(
+    sdkController(api).create({
+      provider: "codex/test-model",
+      title: "Developer",
+      cwd: "/repo",
+      autoAcceptPermissions: true,
+      decisionId: "decision",
+      labels: {},
+    }),
+  ).rejects.toThrow("no supported unattended mode or auto-accept toggle was advertised");
+  expect(create).not.toHaveBeenCalled();
+});
+
+it.each(["modes", "features"])(
+  "reports %s discovery failures instead of starting interactively",
+  async (failure) => {
+    const api = {
+      providers: {
+        listModes: async () => ({
+          modes: [{ id: "full-access" }],
+          ...(failure === "modes" ? { error: "catalog unavailable" } : {}),
+        }),
+        listFeatures: async () => ({
+          features: [],
+          ...(failure === "features" ? { error: "catalog unavailable" } : {}),
+        }),
+      },
+    } as unknown as PaseoApi;
+    await expect(
+      kitchenPermissionConfig(api, { provider: "codex/test-model" }, "/repo", true),
+    ).rejects.toThrow("Cannot configure Kitchen auto-accept for codex: catalog unavailable");
+  },
+);
+
 it("requires explicit selection if the provider advertises no default", async () => {
   const api = {
     providers: { listModels: async () => ({ models: [{ id: "other" }] }) },

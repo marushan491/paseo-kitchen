@@ -285,7 +285,7 @@ export const TeamReportPayloadSchema = z.object({
     .object({
       kind: z.enum(["human", "head-chef", "research", "split"]),
       category: z
-        .enum(["clarification", "architecture", "requirements", "irreversible"])
+        .enum(["clarification", "architecture", "requirements", "access", "irreversible"])
         .optional(),
       text: z.string(),
     })

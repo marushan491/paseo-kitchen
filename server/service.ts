@@ -25,6 +25,15 @@ import {
 } from "./policy.js";
 import { verifyOperatorApproval } from "./approval.js";
 import { WorkflowProfiles } from "./profiles.js";
+import { AutonomySettingsSchema, type AutonomySettings } from "../shared/preferences.js";
+import {
+  readHumanQuestion,
+  isBlockingQuestion,
+  optionalQuestionDue,
+  questionContinuation,
+  autonomyInstructions,
+  type HumanQuestion,
+} from "../shared/question-policy.js";
 import {
   RoleProfileOverrideSchema,
   type RoleProfileOverride,
@@ -107,6 +116,13 @@ export interface TeamServiceOptions {
   now?: () => Date;
   timers?: boolean;
   maxConcurrentAgents?: () => number;
+  autonomySettings?: () => AutonomySettings;
+  inputActivitySupported?: boolean;
+  resumeProviderQuestion?: (
+    agentId: string,
+    requestId: string,
+    guidance: string,
+  ) => Promise<boolean>;
   roleProfiles?: () => Team["roleProfiles"];
   operatorCredential?: () => string | undefined | Promise<string | undefined>;
   publicationCli?: PublicationCli;
@@ -195,6 +211,307 @@ export class TeamService {
   }
   private capacity(): number {
     return resolveAgentCapacity(this.options.maxConcurrentAgents?.());
+  }
+
+  autonomySettings(): AutonomySettings {
+    return AutonomySettingsSchema.parse(this.options.autonomySettings?.() ?? {});
+  }
+
+  autonomyGuidance(): string {
+    const settings = this.autonomySettings();
+    return autonomyInstructions(
+      this.options.inputActivitySupported
+        ? settings
+        : { ...settings, optionalQuestionBehavior: "wait" },
+    );
+  }
+
+  private humanQuestion(item: WorkItem, text: string, category = "clarification"): HumanQuestion {
+    const now = this.now();
+    return {
+      id: newId("question"),
+      revision: item.revision,
+      category,
+      text,
+      askedAt: now.toISOString(),
+      ...(this.options.inputActivitySupported && !isBlockingQuestion(category, text)
+        ? {
+            continueAt: new Date(
+              now.getTime() + this.autonomySettings().questionWaitSeconds * 1000,
+            ).toISOString(),
+          }
+        : {}),
+    };
+  }
+
+  private async questionTeams(agentId: string): Promise<TeamState[]> {
+    const bossTeams = await this.listForBoss(agentId);
+    const caller = await this.resolveCaller(agentId);
+    const workerTeam = caller ? await this.store.get(caller.teamId) : null;
+    return [
+      ...new Map(
+        [...bossTeams, ...(workerTeam ? [workerTeam] : [])].map((state) => [state.team.id, state]),
+      ).values(),
+    ];
+  }
+
+  async isManagedAgent(agentId: string): Promise<boolean> {
+    return (await this.questionTeams(agentId)).some((state) => state.team.status === "active");
+  }
+
+  async noteInputActivity(
+    agentId: string,
+    requestId?: string,
+    occurredAt = this.now().toISOString(),
+  ): Promise<void> {
+    for (const state of await this.questionTeams(agentId)) {
+      await this.markQuestionActivity(state.team.id, agentId, requestId, occurredAt);
+    }
+  }
+
+  async markQuestionActivity(
+    teamId: string,
+    agentId?: string,
+    requestId?: string,
+    occurredAt = this.now().toISOString(),
+  ): Promise<void> {
+    await this.store.commit(teamId, (draft) => {
+      if (draft.team.status !== "active") return { events: [], result: null };
+      const events: TeamEventDraft[] = [];
+      for (const item of Object.values(draft.items)) {
+        const questions = [
+          readHumanQuestion(item.pack.nativeHumanQuestion),
+          ...Object.values((item.pack.providerHumanQuestions ?? {}) as Record<string, unknown>).map(
+            readHumanQuestion,
+          ),
+        ];
+        for (const question of questions) {
+          if (
+            !question ||
+            question.responseStartedAt ||
+            !question.continueAt ||
+            Date.parse(occurredAt) < Date.parse(question.askedAt) ||
+            (requestId && question.providerRequestId !== requestId) ||
+            (agentId &&
+              agentId !== draft.team.bossAgentId &&
+              question.agentId !== agentId &&
+              !Object.values(draft.bindings).some(
+                (binding) => binding.workItemId === item.id && binding.agentId === agentId,
+              ))
+          )
+            continue;
+          question.responseStartedAt = occurredAt;
+          if (question.providerRequestId) {
+            (item.pack.providerHumanQuestions as Record<string, unknown>)[
+              question.providerRequestId
+            ] = question;
+          } else item.pack.nativeHumanQuestion = question;
+          events.push({
+            type: "question.response-started",
+            actor: { type: "human", id: "operator" },
+            workItemId: item.id,
+            text: "An operator started replying; automatic continuation is paused",
+            data: { questionId: question.id },
+          });
+        }
+      }
+      return { events, result: null };
+    });
+  }
+
+  async trackProviderQuestion(
+    agentId: string,
+    request: { id: string; text: string; responseStartedAt?: string },
+  ): Promise<void> {
+    for (const state of await this.questionTeams(agentId)) {
+      await this.store.commit(state.team.id, (draft) => {
+        if (draft.team.status !== "active") return { events: [], result: null };
+        const item =
+          Object.values(draft.items).find((target) =>
+            Object.values(draft.bindings).some(
+              (binding) =>
+                binding.agentId === agentId &&
+                binding.workItemId === target.id &&
+                binding.status === "active",
+            ),
+          ) ?? draft.items[draft.team.rootItemId];
+        const questions = (item.pack.providerHumanQuestions ??= {}) as Record<string, unknown>;
+        const existing = readHumanQuestion(questions[request.id]);
+        if (existing) {
+          if (request.responseStartedAt) {
+            existing.responseStartedAt = request.responseStartedAt;
+            questions[request.id] = existing;
+          }
+          return { events: [], result: null };
+        }
+        const question = {
+          ...this.humanQuestion(item, request.text),
+          agentId,
+          providerRequestId: request.id,
+          ...(request.responseStartedAt ? { responseStartedAt: request.responseStartedAt } : {}),
+        };
+        questions[request.id] = question;
+        return {
+          events: [
+            {
+              type: "question.requested",
+              actor: RUNTIME,
+              workItemId: item.id,
+              text: request.text,
+              data: { questionId: question.id, continueAt: question.continueAt },
+            },
+          ],
+          result: null,
+        };
+      });
+    }
+  }
+
+  async resolveProviderQuestion(agentId: string, requestId: string): Promise<void> {
+    for (const state of await this.questionTeams(agentId)) {
+      await this.store.commit(state.team.id, (draft) => {
+        for (const item of Object.values(draft.items)) {
+          const questions = item.pack.providerHumanQuestions as Record<string, unknown> | undefined;
+          if (questions && readHumanQuestion(questions[requestId])?.agentId === agentId)
+            delete questions[requestId];
+        }
+        return { events: [], result: null };
+      });
+    }
+  }
+
+  private async continueOptionalQuestions(teamId: string): Promise<void> {
+    if (
+      !this.options.inputActivitySupported ||
+      this.autonomySettings().optionalQuestionBehavior !== "continue"
+    )
+      return;
+    const observed = await this.store.get(teamId);
+    if (
+      !observed ||
+      observed.team.status !== "active" ||
+      !Object.values(observed.items).some(
+        (item) =>
+          readHumanQuestion(item.pack.nativeHumanQuestion) ||
+          Object.keys((item.pack.autonomyMessages ?? {}) as Record<string, unknown>).length ||
+          Object.keys((item.pack.providerHumanQuestions ?? {}) as Record<string, unknown>).length,
+      )
+    )
+      return;
+    const providerQuestions = await this.store.commit(teamId, (draft) => {
+      const events: TeamEventDraft[] = [];
+      const pending: HumanQuestion[] = [];
+      if (draft.team.status !== "active") return { events, result: pending };
+      for (const item of Object.values(draft.items)) {
+        const question = readHumanQuestion(item.pack.nativeHumanQuestion);
+        if (
+          item.phase === "blocked" &&
+          question?.revision === item.revision &&
+          optionalQuestionDue(question, this.autonomySettings(), this.now())
+        ) {
+          const pack = this.pack(draft.team);
+          const previous = item.phaseHistory.findLast(
+            (history) => boardOf(pack, item).phases[history.phase]?.kind === "working",
+          );
+          if (!previous) continue;
+          delete item.pack.nativeHumanQuestion;
+          delete item.pack.questionCategory;
+          item.pack.autonomyContinuation = questionContinuation(question.text);
+          events.push({
+            type: "question.continued",
+            actor: RUNTIME,
+            workItemId: item.id,
+            text: "Optional waiting period ended; continuing research without a human answer",
+            data: { questionId: question.id },
+          });
+          enterPhase(
+            draft,
+            pack,
+            item,
+            previous.phase,
+            RUNTIME,
+            events,
+            "continue independent investigation",
+          );
+        }
+        for (const value of Object.values(
+          (item.pack.providerHumanQuestions ?? {}) as Record<string, unknown>,
+        )) {
+          const providerQuestion = readHumanQuestion(value);
+          if (
+            providerQuestion &&
+            optionalQuestionDue(providerQuestion, this.autonomySettings(), this.now())
+          )
+            pending.push(providerQuestion);
+        }
+      }
+      return { events, result: pending };
+    });
+    for (const question of providerQuestions) {
+      if (!question.agentId || !question.providerRequestId || !this.options.resumeProviderQuestion)
+        continue;
+      const resumed = await this.options.resumeProviderQuestion(
+        question.agentId,
+        question.providerRequestId,
+        questionContinuation(question.text),
+      );
+      if (!resumed) continue;
+      await this.resolveProviderQuestion(question.agentId, question.providerRequestId);
+      await this.store.commit(teamId, (draft) => {
+        const item = draft.items[draft.team.rootItemId];
+        const pending = (item.pack.autonomyMessages ??= {}) as Record<string, unknown>;
+        pending[question.id] = {
+          agentId: question.agentId,
+          guidance: questionContinuation(question.text),
+        };
+        return { events: [], result: null };
+      });
+    }
+    await this.flushAutonomyMessages(teamId);
+  }
+
+  private async flushAutonomyMessages(teamId: string) {
+    const state = await this.store.get(teamId);
+    if (!state || state.team.status !== "active") return;
+    const item = state.items[state.team.rootItemId];
+    const pending = (item.pack.autonomyMessages ?? {}) as Record<
+      string,
+      { agentId: string; guidance: string }
+    >;
+    for (const [questionId, message] of Object.entries(pending)) {
+      try {
+        await this.options.controller.send(
+          message.agentId,
+          message.guidance,
+          "steer",
+          undefined,
+          `kitchen-question:${questionId}`,
+        );
+        await this.store.commit(teamId, (draft) => {
+          const messages = draft.items[draft.team.rootItemId].pack.autonomyMessages as Record<
+            string,
+            unknown
+          >;
+          delete messages[questionId];
+          return {
+            events: [
+              {
+                type: "question.continued",
+                actor: RUNTIME,
+                text: "Optional provider question expired; the agent received instructions to investigate further without choosing an answer",
+                data: { questionId },
+              },
+            ],
+            result: null,
+          };
+        });
+      } catch (error) {
+        this.logger.warn(
+          { err: error, teamId, questionId },
+          "Question continuation delivery deferred",
+        );
+      }
+    }
   }
 
   private limitPack(pack: WorkflowPack): WorkflowPack {
@@ -1121,6 +1438,7 @@ export class TeamService {
       cwd,
       workspaceId,
       mode: params.mode,
+      autoAcceptPermissions: this.autonomySettings().autoAcceptPermissions,
       thinking: params.thinking,
       decisionId: claim.requestId,
       labels: {
@@ -1688,7 +2006,9 @@ export class TeamService {
         return (
           item.phase === "blocked" &&
           question?.revision === item.revision &&
-          ["clarification", "architecture", "requirements"].includes(question.category ?? "")
+          ["clarification", "architecture", "requirements", "access"].includes(
+            question.category ?? "",
+          )
         );
       });
       for (const item of Object.values(draft.items)) {
@@ -1913,10 +2233,11 @@ export class TeamService {
         if (payload.needs && item.phase === "blocked") {
           item.pack.questionCategory = payload.needs.category ?? "clarification";
           if (payload.needs.kind === "human")
-            item.pack.nativeHumanQuestion = {
-              revision: item.revision,
-              category: payload.needs.category ?? "clarification",
-            };
+            item.pack.nativeHumanQuestion = this.humanQuestion(
+              item,
+              payload.needs.text,
+              payload.needs.category,
+            );
         }
         return {
           events,
@@ -2415,6 +2736,7 @@ export class TeamService {
   private async dispatchOnce(): Promise<void> {
     try {
       for (const teamId of await this.store.listIds()) {
+        await this.continueOptionalQuestions(teamId);
         const state = await this.store.get(teamId);
         if (!state || state.team.kitchen?.pendingInitialBrief) continue;
         if (state.team.status === "active" || state.team.status === "paused")
@@ -2871,6 +3193,7 @@ export class TeamService {
         cwd,
         thinking: profile.thinking,
         mode: profile.mode,
+        autoAcceptPermissions: this.autonomySettings().autoAcceptPermissions,
         labels: {
           [TEAM_LABEL]: state.team.id,
           [TEAM_ROLE_LABEL]: roleId,
@@ -3055,6 +3378,9 @@ export class TeamService {
     if (state.team.kitchen?.spec)
       lines.push("", "## Mission specification", state.team.kitchen.spec);
     appendMissionGoal(state.team, lines);
+    lines.push("", "## Autonomy and questions", this.autonomyGuidance());
+    if (typeof item.pack.autonomyContinuation === "string")
+      lines.push("", "## Deferred optional question", item.pack.autonomyContinuation);
     this.appendRoleWorkflow(state, item, role.id, lines);
     if (item.board === "item") lines.push("", "## This work item", item.objective);
     if (item.acceptanceCriteria.length) {
@@ -3606,7 +3932,7 @@ function appendMissionGoal(team: Team, lines: string[]): void {
       "",
       "## Goal-driven mission",
       "Keep working toward the declared team goal and every acceptance criterion. Plan the next dependent features without waiting for a separate kickoff. Discover and request missing implementation or research within this goal through stable workRequests when your role permits it; never invent unrelated scope or create a second team. A finished work item is not a finished mission. Existing dependency scheduling continues automatically through review, independent verification and combined integration. Stop only when the verified goal is ready for operator acceptance, an explicit limit is reached, the operator stops the mission, or a genuine human decision is needed.",
-      'For a genuine scope, product, permission or missing-information decision, report needs:{kind:"human",text:"the precise question and options"}. This persists the question and blocks that item; the operator answer resumes it. Never guess an answer, approve your own result, publish, merge or deploy.',
+      'Investigate routine missing details first. Use needs:{kind:"human",text:"the precise question and options"} only when investigation cannot resolve the issue. Kitchen applies its configured optional-question waiting period; missing access and required authorization remain human blockers. Never invent a human answer, approve your own result, publish, merge or deploy.',
     );
 }
 

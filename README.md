@@ -69,7 +69,19 @@ Standard and Basic are friendly names for the persisted `kitchen` and `software-
 
 Standard team is goal-driven by default. The Head Chef plans work and permitted roles can request additional scoped tasks and dependencies as they discover what remains. Structured CLI/RPC starts can request a fixed plan instead. Team role/provider/model preferences belong in **Team** and project defaults, rather than a separate Developer selector in the Kitchen composer.
 
-The built-in Standard team has no implicit token, cost, active-time, delegation-depth or additional-item caps. The default capacity is four concurrent Cooks; configure a positive maximum under **Settings → Connection & capacity**. Queued work waits for a free slot. Explicit budgets and the selected pack's structural rules remain binding. Missing provider capacity, a required human answer or evidence can pause progress. The persisted runtime resumes work without inventing a successful result. Standard team waits for explicit acceptance after verification; it does not automatically approve, merge or deploy.
+The built-in Standard team has no implicit token, cost, active-time, delegation-depth or additional-item caps. The default capacity is four concurrent Cooks; configure a positive maximum under **Settings → Connection & capacity**. Queued work waits for a free slot. Explicit budgets and the selected pack's structural rules remain binding. Missing provider capacity, access, required approval or evidence can pause affected work. The persisted runtime resumes work without inventing a successful result. Standard team waits for explicit acceptance after verification; it does not automatically approve, merge or deploy.
+
+## Autonomy
+
+![Kitchen autonomy settings](docs/screenshots/autonomy-settings.png)
+
+Under **Settings → Connection & capacity → Autonomy**, new Head Chefs and Cooks default to the provider's advertised unattended permissions. OpenCode retains its Build or Plan mode and enables **Auto accept permission prompts**. Disable **Tool permissions** to keep the chosen provider permissions. Existing agents keep their current configuration.
+
+Optional questions default to a **60-second** reply window. Set a different window between 5 and 3600 seconds, or choose **Wait for my answer**. The agent should inspect the repository, documentation, installed skills and available browser context before asking. When an optional window expires, Kitchen continues investigation and records a reversible assumption within your existing goal. It does not select a proposed answer or claim you approved it. Delivery of the continuation message is persisted and retried if temporarily unavailable.
+
+Focusing the reply field, typing or selecting a question option holds the question across updated clients. Automatic focus and restored focus do not count. The reply marker survives plugin and daemon reloads. Missing credentials, login, OAuth consent, MFA and required authorization remain open; independent work can continue. Tool auto-accept does not grant mission acceptance, merge or publication approval.
+
+Automatic question continuation requires an updated host **and** clients with the [input-activity capability](https://github.com/marushan49/pandaos/blob/main/public-docs/plugins/reference.md#lifecycle-hooks). An older host waits for answers and shows an update notice. Update each client before relying on reply protection across devices. The screenshot and saved-settings walkthrough were captured in an isolated Mac browser with zero inference calls; compact layout was checked at 430 pixels. Native Android/iOS gestures were not exercised in that walkthrough.
 
 ## Screens and navigation
 

@@ -117,6 +117,10 @@ async function fixture() {
   });
   services.add(service);
   const paseo = {
+    providers: {
+      listModes: async () => ({ modes: [{ id: "full-access" }] }),
+      listFeatures: async () => ({ features: [] }),
+    },
     workspaces: {
       ref: () => ({
         refresh: async () => ({

@@ -11,9 +11,21 @@ import { ScrollView, Text, View } from "react-native";
 import {
   AgentCapacitySchema,
   DEFAULT_AGENT_CAPACITY,
+  AutonomySettingsSchema,
   factorySettings,
 } from "../shared/preferences.js";
+import { factoryAutonomyStatus } from "../shared/question-contracts.js";
+import { Choice } from "./choice.js";
 import { Action, Field, Disclosure, useFactoryStyles } from "./ui.js";
+
+const permissionOptions = [
+  { id: "automatic", title: "Automatically accept tool permissions" },
+  { id: "ask", title: "Use the selected provider permissions" },
+];
+const questionOptions = [
+  { id: "continue", title: "Continue investigating after the waiting period" },
+  { id: "wait", title: "Wait for my answer" },
+];
 
 function CapacityStatus(props: PluginSurfaceProps) {
   const styles = useFactoryStyles(props);
@@ -85,9 +97,32 @@ function ReadySettings(
   const [cliExecutable, setCliExecutable] = useState(state.values.cliExecutable);
   const [cliArguments, setCliArguments] = useState(state.values.cliArguments.join("\n"));
   const [packDirectory, setPackDirectory] = useState(state.values.packDirectory);
+  const [autoAcceptPermissions, setAutoAcceptPermissions] = useState(
+    state.values.autoAcceptPermissions,
+  );
+  const [questionBehavior, setQuestionBehavior] = useState(state.values.optionalQuestionBehavior);
+  const [questionWait, setQuestionWait] = useState(String(state.values.questionWaitSeconds));
+  const changePermissions = useCallback(
+    (value: string) => setAutoAcceptPermissions(value === "automatic"),
+    [],
+  );
+  const changeBehavior = useCallback(
+    (value: string) => setQuestionBehavior(value as "continue" | "wait"),
+    [],
+  );
+  const statusRpc = useRpc(factoryAutonomyStatus);
+  const status = useQuery({
+    queryKey: ["factory", "autonomy-status", props.host.id],
+    queryFn: () => statusRpc({}),
+  });
+  const autonomy = AutonomySettingsSchema.safeParse({
+    autoAcceptPermissions,
+    optionalQuestionBehavior: questionBehavior,
+    questionWaitSeconds: Number(questionWait),
+  });
   const count = Number(concurrency);
   const exclusiveTarget = !daemonHome.trim() || !daemonHost.trim();
-  const valid = AgentCapacitySchema.safeParse(count).success && exclusiveTarget;
+  const valid = AgentCapacitySchema.safeParse(count).success && exclusiveTarget && autonomy.success;
   const save = useCallback(() => {
     void state.save(
       {
@@ -99,10 +134,25 @@ function ReadySettings(
         cliArguments: cliArguments.split("\n").filter(Boolean),
         packDirectory: packDirectory.trim(),
         maxConcurrentAgents: count,
+        autoAcceptPermissions,
+        optionalQuestionBehavior: questionBehavior,
+        questionWaitSeconds: Number(questionWait),
       },
       state.revision,
     );
-  }, [state, directory, count, daemonHost, daemonHome, cliExecutable, cliArguments, packDirectory]);
+  }, [
+    state,
+    directory,
+    count,
+    daemonHost,
+    daemonHome,
+    cliExecutable,
+    cliArguments,
+    packDirectory,
+    autoAcceptPermissions,
+    questionBehavior,
+    questionWait,
+  ]);
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Kitchen settings</Text>
@@ -124,6 +174,50 @@ function ReadySettings(
         <Text style={styles.muted}>
           Additional work stays in the queue when every configured slot is occupied.
         </Text>
+      </View>
+      <View style={styles.card}>
+        <Text style={styles.heading}>Autonomy</Text>
+        <Choice
+          {...props}
+          label="Tool permissions"
+          value={autoAcceptPermissions ? "automatic" : "ask"}
+          options={permissionOptions}
+          onChange={changePermissions}
+        />
+        <Choice
+          {...props}
+          label="Optional questions"
+          value={questionBehavior}
+          options={questionOptions}
+          onChange={changeBehavior}
+        />
+        {questionBehavior === "continue" ? (
+          <Field
+            theme={theme}
+            label="Wait before continuing · seconds"
+            value={questionWait}
+            onChange={setQuestionWait}
+            keyboardType="numeric"
+          />
+        ) : null}
+        <Text style={styles.muted}>
+          Starting a reply pauses automatic continuation. Missing credentials, login or OAuth
+          consent and required approvals stay open. Independent work can continue.
+        </Text>
+        {status.isError ? (
+          <Text style={styles.danger}>
+            Input protection could not be checked. Automatic question continuation is unavailable.
+          </Text>
+        ) : null}
+        {!status.isError && status.data?.inputActivitySupported === false ? (
+          <Text style={styles.danger}>
+            Update the host and clients to protect replies across devices. Optional questions
+            currently wait for your answer.
+          </Text>
+        ) : null}
+        {!status.isError && !status.data ? (
+          <Text style={styles.muted}>Checking input protection…</Text>
+        ) : null}
       </View>
       {count > DEFAULT_AGENT_CAPACITY ? (
         <Text style={styles.muted}>
@@ -189,7 +283,7 @@ function ReadySettings(
       </Disclosure>
       {!valid ? (
         <Text style={styles.danger}>
-          Use a positive safe integer and only one CLI target: daemon home or WebSocket address.
+          Use a positive capacity, a waiting period from 5 to 3600 seconds and only one CLI target.
         </Text>
       ) : null}
       {state.saveError ? (

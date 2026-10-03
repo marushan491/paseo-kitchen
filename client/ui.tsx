@@ -108,6 +108,7 @@ export function Field({
   placeholder,
   keyboardType,
   autoFocus = false,
+  onFocus,
 }: {
   theme: PluginHostProps["theme"];
   label: string;
@@ -118,6 +119,7 @@ export function Field({
   placeholder?: string;
   keyboardType?: TextInputProps["keyboardType"];
   autoFocus?: boolean;
+  onFocus?: TextInputProps["onFocus"];
 }) {
   const nativeId = useId();
   const { width } = useWindowDimensions();
@@ -151,6 +153,7 @@ export function Field({
         secureTextEntry={secureTextEntry}
         keyboardType={keyboardType}
         autoFocus={autoFocus}
+        onFocus={onFocus}
         placeholder={placeholder}
         placeholderTextColor={theme.colors.foregroundMuted}
         style={styles.input}

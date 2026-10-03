@@ -197,6 +197,14 @@
       "capturedAt": "2026-10-03T09:35:57.473426+00:00",
       "captureMethod": "Actual owned Mac Electron window via CDP; Studio or dialog bounds captured directly; isolated QA host; no image generation",
       "inferenceCalls": 0
+    },
+    {
+      "file": "autonomy-settings.png",
+      "dimensions": [1120, 1064],
+      "sha256": "b3b04fa6e411f3178138efa2da79a4e924464a2c51ef307e747e99c4a6dd37d2",
+      "capturedAt": "2026-10-03T13:29:58.086Z",
+      "captureMethod": "Actual Mac Chrome Studio bounds captured via CDP; isolated dev host; no image generation",
+      "inferenceCalls": 0
     }
   ],
   "verifiedHostCore": "ffb79e37c",

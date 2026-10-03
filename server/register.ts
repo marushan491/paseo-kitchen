@@ -38,6 +38,11 @@ import { sdkController, factoryLogger } from "./controller.js";
 import { PackRegistry } from "./pack.js";
 import { TeamService, type TeamServiceOptions } from "./service.js";
 import { parseFactoryCompletion, factoryValidationFeedback } from "./completion.js";
+import {
+  registerQuestionHooks,
+  resumeProviderQuestion,
+  recoverProviderQuestions,
+} from "./question-hooks.js";
 export type FactoryOptions = Omit<
   TeamServiceOptions,
   "controller" | "logger" | "packs" | "storageRoot"
@@ -57,6 +62,10 @@ export function registerFactory(server: PluginServerContext, options: FactoryOpt
   let starting: Promise<TeamService> | null = null;
   let disposed = false;
   let releaseOwnership: (() => Promise<void>) | undefined;
+  const inputActivitySupported =
+    (
+      server as PluginServerContext & { supportsLifecycleEvent?(name: string): boolean }
+    ).supportsLifecycleEvent?.("agent.input_activity") === true;
   const ready = async (paseo: PaseoApi) => {
     if (disposed || options.enabled?.() === false) throw new Error("Factory plugin is disabled");
     if (starting) return starting;
@@ -94,6 +103,9 @@ export function registerFactory(server: PluginServerContext, options: FactoryOpt
           controller: sdkController(paseo, hostControl),
           logger: options.logger ?? factoryLogger,
           packs,
+          inputActivitySupported,
+          resumeProviderQuestion: (agentId, requestId, guidance) =>
+            resumeProviderQuestion(paseo, agentId, requestId, guidance),
         });
         const nextSchedules = new KitchenSchedules({
           storageRoot,
@@ -103,6 +115,7 @@ export function registerFactory(server: PluginServerContext, options: FactoryOpt
         });
         try {
           await next.start();
+          if (inputActivitySupported) await recoverProviderQuestions(paseo, next);
           await nextSchedules.start();
           if (disposed) throw new Error("Factory stopped during startup");
         } catch (error) {
@@ -133,6 +146,7 @@ export function registerFactory(server: PluginServerContext, options: FactoryOpt
       templates: await factory.workflowTemplates(),
     };
   });
+  const removeQuestions = registerQuestionHooks(server, ready, inputActivitySupported);
   server.handle(factoryWorkflowSave, async (input, { paseo }) =>
     (await ready(paseo)).workflows.save(input.definition, input.expectedRevision),
   );
@@ -294,6 +308,7 @@ export function registerFactory(server: PluginServerContext, options: FactoryOpt
     async cleanup() {
       disposed = true;
       remove();
+      removeQuestions();
       await starting?.catch(() => undefined);
       try {
         await schedules?.stop();

@@ -8,6 +8,7 @@ import { createHostControl } from "./host-control.js";
 import type { HostControlOptions } from "./host-control.js";
 import type { PaseoAgentCreateOptions } from "@getpaseo/client";
 import type { PaseoApi, PaseoAgent } from "@getpaseo/client";
+import { kitchenPermissionConfig } from "./permission-config.js";
 export interface FactoryAgent {
   id: string;
   routingNotice?: AgentRoutingNotice;
@@ -37,6 +38,7 @@ export interface FactoryCreate {
   initialPrompt?: string;
   thinking?: string;
   mode?: string;
+  autoAcceptPermissions?: boolean;
   labels: Record<string, string>;
   parentAgentId?: string;
   workspaceId?: string;
@@ -53,7 +55,13 @@ export interface FactoryController {
   list(): Promise<FactoryAgent[]>;
   isRunning(id: string): Promise<boolean>;
   create(input: FactoryCreate): Promise<{ id: string }>;
-  send(id: string, text: string, behavior?: "steer", context?: FactorySendContext): Promise<void>;
+  send(
+    id: string,
+    text: string,
+    behavior?: "steer",
+    context?: FactorySendContext,
+    messageId?: string,
+  ): Promise<void>;
   cancel(id: string): Promise<void>;
   update(id: string, changes: { title?: string; labels?: Record<string, string> }): Promise<void>;
   detach(id: string): Promise<void>;
@@ -180,7 +188,12 @@ export function sdkController(
       }
       const options: PaseoAgentCreateOptions = {
         idempotencyKey: input.decisionId,
-        config: { provider, thinkingOptionId: input.thinking, modeId: input.mode },
+        config: await kitchenPermissionConfig(
+          paseo,
+          { provider, thinkingOptionId: input.thinking, modeId: input.mode },
+          input.cwd,
+          input.autoAcceptPermissions === true,
+        ),
         cwd: input.cwd,
         parent: input.parentAgentId,
         title: input.title,
@@ -202,7 +215,7 @@ export function sdkController(
         : await paseo.agents.create(options);
       return { id: created.id };
     },
-    async send(id, text, behavior, context) {
+    async send(id, text, behavior, context, messageId) {
       const blocks = context ? await nativeContext(paseo, context) : [];
       const images = [
         ...new Map(
@@ -219,9 +232,11 @@ export function sdkController(
       const packet = originalText
         ? `${text}\n\n## Native conversation context\n${originalText}`
         : text;
-      await paseo.agents
-        .ref(id)
-        .send(packet, { activeTurnBehavior: behavior, ...(images?.length ? { images } : {}) });
+      await paseo.agents.ref(id).send(packet, {
+        activeTurnBehavior: behavior,
+        ...(messageId ? { messageId } : {}),
+        ...(images?.length ? { images } : {}),
+      });
     },
   };
 }

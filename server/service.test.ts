@@ -2,6 +2,8 @@ import { applyWorkflowDesign } from "./workflow-design.js";
 import { definitionFromPack, packFromSnapshot } from "./workflow-definitions.js";
 import { workflowHead } from "./workflow-runtime.js";
 import { factorySettings } from "../shared/preferences.js";
+import { AutonomySettingsSchema } from "../shared/preferences.js";
+import { readHumanQuestion } from "../shared/question-policy.js";
 import { workflowOf } from "./workflow-metadata.js";
 import { workflowConnections, roleTemplate } from "../shared/role-builder.js";
 import { FactoryWorkflowSchema } from "../shared/factory-contracts.js";
@@ -102,6 +104,278 @@ function itemByKey(state: TeamState, key: string) {
 }
 
 describe("TeamService", () => {
+  it.each(["kitchen", "software-basic"])(
+    "continues a %s optional question after sixty seconds without recording a human answer",
+    async (packId) => {
+      const host = fakeHost(root);
+      let now = new Date("2099-10-03T10:00:00Z");
+      const service = new TeamService({
+        ...(host.options as unknown as TeamServiceOptions),
+        storageRoot: root,
+        inputActivitySupported: true,
+        now: () => now,
+      });
+      await service.start();
+      const team = await service.startTeam({
+        bossAgentId: "boss",
+        packId,
+        title: "Autonomous feature",
+        objective: "Implement the requested feature",
+      });
+      await service.dispatchAll();
+      await service.report(host.agentFor("po").id, {
+        outcome: "planned",
+        summary: "Optional detail",
+        needs: {
+          kind: "human",
+          category: "clarification",
+          text: "Should the reversible button label be Save or Apply?",
+        },
+      });
+      await service.dispatchAll();
+      const question = readHumanQuestion(
+        (await service.status(team.team.id)).state.items[team.team.rootItemId].pack
+          .nativeHumanQuestion,
+      )!;
+      expect(question.continueAt).toBe("2099-10-03T10:01:00.000Z");
+      now = new Date(now.getTime() + 59000);
+      await service.dispatchAll();
+      expect((await service.status(team.team.id)).state.items[team.team.rootItemId].phase).toBe(
+        "blocked",
+      );
+      now = new Date(now.getTime() + 1000);
+      await service.dispatchAll();
+      const after = await service.status(team.team.id);
+      expect(after.state.items[team.team.rootItemId].phase).toBe("plan");
+      expect(
+        after.state.items[team.team.rootItemId].reports.some(
+          (report) => report.outcome === "answer",
+        ),
+      ).toBe(false);
+      expect(after.events.filter((event) => event.type === "question.continued")).toHaveLength(1);
+      expect(
+        host.prompts.filter((entry) => entry.agentId !== "boss").map((entry) => entry.prompt),
+      ).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("Silence is not an answer or authorization"),
+        ]),
+      );
+      await service.dispatchAll();
+      expect(
+        (await service.status(team.team.id)).events.filter(
+          (event) => event.type === "question.continued",
+        ),
+      ).toHaveLength(1);
+      await service.shutdown();
+    },
+  );
+
+  it("keeps a started reply across service reload and honors wait mode and real access blockers", async () => {
+    const host = fakeHost(root);
+    let now = new Date("2099-10-03T10:00:00Z");
+    let settings = AutonomySettingsSchema.parse({});
+    const options = {
+      ...(host.options as unknown as TeamServiceOptions),
+      storageRoot: root,
+      inputActivitySupported: true,
+      now: () => now,
+      autonomySettings: () => settings,
+    };
+    let service = new TeamService(options);
+    await service.start();
+    const team = await service.startTeam({
+      bossAgentId: "boss",
+      packId: "kitchen",
+      title: "Reply protection",
+      objective: "Deliver the feature",
+    });
+    await service.dispatchAll();
+    await service.report(host.agentFor("po").id, {
+      outcome: "planned",
+      summary: "Optional",
+      needs: { kind: "human", text: "Which reversible label should I use?" },
+    });
+    await service.dispatchAll();
+    await service.noteInputActivity("foreign-agent");
+    expect(
+      readHumanQuestion(
+        (await service.status(team.team.id)).state.items[team.team.rootItemId].pack
+          .nativeHumanQuestion,
+      )?.responseStartedAt,
+    ).toBeUndefined();
+    await service.noteInputActivity("boss");
+    await service.shutdown();
+    service = new TeamService(options);
+    await service.start();
+    now = new Date(now.getTime() + 120000);
+    await service.dispatchAll();
+    expect((await service.status(team.team.id)).state.items[team.team.rootItemId].phase).toBe(
+      "blocked",
+    );
+    expect(
+      readHumanQuestion(
+        (await service.status(team.team.id)).state.items[team.team.rootItemId].pack
+          .nativeHumanQuestion,
+      )?.responseStartedAt,
+    ).toBe("2099-10-03T10:00:00.000Z");
+    await service.message(team.team.id, "Use Save", { type: "human", id: "operator" });
+    await service.dispatchAll();
+    let state = (await service.status(team.team.id)).state;
+    let po = state.bindings[state.items[team.team.rootItemId].bindings.po].agentId;
+    settings = AutonomySettingsSchema.parse({ optionalQuestionBehavior: "wait" });
+    await service.report(po, {
+      outcome: "planned",
+      summary: "Optional",
+      needs: { kind: "human", text: "Save or Apply?" },
+    });
+    now = new Date(now.getTime() + 120000);
+    await service.dispatchAll();
+    expect((await service.status(team.team.id)).state.items[team.team.rootItemId].phase).toBe(
+      "blocked",
+    );
+    await service.message(team.team.id, "Use Apply", { type: "human", id: "operator" });
+    await service.dispatchAll();
+    state = (await service.status(team.team.id)).state;
+    po = state.bindings[state.items[team.team.rootItemId].bindings.po].agentId;
+    settings = AutonomySettingsSchema.parse({});
+    await service.report(po, {
+      outcome: "planned",
+      summary: "Access missing",
+      needs: { kind: "human", category: "access", text: "OAuth login needs your consent" },
+    });
+    now = new Date(now.getTime() + 3600000);
+    await service.dispatchAll();
+    expect((await service.status(team.team.id)).state.items[team.team.rootItemId].phase).toBe(
+      "blocked",
+    );
+    await service.shutdown();
+  });
+
+  it("never automatically resumes questions without cross-client input protection", async () => {
+    const host = fakeHost(root);
+    let now = new Date("2099-10-03T10:00:00Z");
+    const service = new TeamService({
+      ...(host.options as unknown as TeamServiceOptions),
+      storageRoot: root,
+      now: () => now,
+    });
+    await service.start();
+    const team = await service.startTeam({
+      bossAgentId: "boss",
+      packId: "kitchen",
+      title: "Old host",
+      objective: "Preserve replies",
+    });
+    await service.dispatchAll();
+    await service.report(host.agentFor("po").id, {
+      outcome: "planned",
+      summary: "Question",
+      needs: { kind: "human", text: "Save or Apply?" },
+    });
+    now = new Date(now.getTime() + 120000);
+    await service.dispatchAll();
+    expect((await service.status(team.team.id)).state.items[team.team.rootItemId].phase).toBe(
+      "blocked",
+    );
+    expect(service.autonomyGuidance()).toContain("wait for the operator");
+    await service.shutdown();
+  });
+  it("tracks provider questions only for Kitchen agents, preserves recovered drafts and expires optional questions once", async () => {
+    const host = fakeHost(root);
+    let now = new Date("2099-10-03T10:00:00Z");
+    const resumeProviderQuestion = vi.fn(async () => true);
+    const service = new TeamService({
+      ...(host.options as unknown as TeamServiceOptions),
+      storageRoot: root,
+      inputActivitySupported: true,
+      now: () => now,
+      resumeProviderQuestion,
+    });
+    await service.start();
+    const team = await service.startTeam({
+      bossAgentId: "boss",
+      title: "Question handling",
+      objective: "Keep independent work moving",
+    });
+    await service.trackProviderQuestion("unrelated-chat", { id: "foreign", text: "Label?" });
+    await service.trackProviderQuestion("boss", { id: "optional", text: "Save or Apply?" });
+    await service.trackProviderQuestion("boss", { id: "started", text: "Blue or purple?" });
+    await service.trackProviderQuestion("boss", {
+      id: "started",
+      text: "Blue or purple?",
+      responseStartedAt: now.toISOString(),
+    });
+    await service.trackProviderQuestion("boss", {
+      id: "access",
+      text: "Please complete OAuth consent",
+    });
+    now = new Date(now.getTime() + 60000);
+    await service.dispatchAll();
+    expect(resumeProviderQuestion).toHaveBeenCalledExactlyOnceWith(
+      "boss",
+      "optional",
+      expect.stringContaining("Silence is not an answer or authorization"),
+    );
+    const questions = (await service.status(team.team.id)).state.items[team.team.rootItemId].pack
+      .providerHumanQuestions as Record<string, unknown>;
+    expect(Object.keys(questions).sort()).toEqual(["access", "started"]);
+    await service.dispatchAll();
+    expect(resumeProviderQuestion).toHaveBeenCalledTimes(1);
+    await service.shutdown();
+  });
+  it("retries provider continuation delivery across reload after a guarded dismissal", async () => {
+    const host = fakeHost(root);
+    let now = new Date("2099-10-03T10:00:00Z");
+    let unavailable = true;
+    const send = vi.fn(async (_agentId: string, prompt: string) => {
+      if (prompt.includes("Silence is not an answer or authorization") && unavailable)
+        throw new Error("Disconnected");
+    });
+    const resumeProviderQuestion = vi.fn(async () => true);
+    const options = {
+      ...(host.options as unknown as TeamServiceOptions),
+      controller: {
+        ...(host.options.controller as unknown as TeamServiceOptions["controller"]),
+        send,
+      },
+      storageRoot: root,
+      inputActivitySupported: true,
+      now: () => now,
+      resumeProviderQuestion,
+    };
+    let service = new TeamService(options);
+    await service.start();
+    const team = await service.startTeam({
+      bossAgentId: "boss",
+      title: "Delivery retry",
+      objective: "Continue safely",
+    });
+    await service.trackProviderQuestion("boss", { id: "optional", text: "Save or Apply?" });
+    now = new Date(now.getTime() + 60000);
+    await service.dispatchAll();
+    const before = await service.status(team.team.id);
+    expect(before.events.filter((event) => event.type === "question.continued")).toHaveLength(0);
+    expect(
+      Object.keys(
+        before.state.items[team.team.rootItemId].pack.autonomyMessages as Record<string, unknown>,
+      ),
+    ).toHaveLength(1);
+    await service.shutdown();
+    unavailable = false;
+    service = new TeamService(options);
+    await service.start();
+    await service.dispatchAll();
+    const after = await service.status(team.team.id);
+    expect(after.state.items[team.team.rootItemId].pack.autonomyMessages).toEqual({});
+    expect(after.events.filter((event) => event.type === "question.continued")).toHaveLength(1);
+    expect(resumeProviderQuestion).toHaveBeenCalledTimes(1);
+    const attempts = send.mock.calls.filter((call) =>
+      call[1].includes("Silence is not an answer or authorization"),
+    );
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0].slice(2)).toEqual(attempts[1].slice(2));
+    await service.shutdown();
+  });
   let root: string;
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "pandaos-team-"));
@@ -1494,7 +1768,7 @@ describe("Kitchen runtime", () => {
     const host = kitchenFakeHost();
     Object.assign(host.records.get("boss")!, { cwd: root, workspaceId: "native-workspace" });
     const send = vi.fn(async () => {});
-    let clock = new Date("2026-10-03T12:00:00Z");
+    let clock = new Date(Date.now() + 1000);
     const options = {
       ...host.options,
       storageRoot: root,

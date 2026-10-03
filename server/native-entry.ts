@@ -16,6 +16,7 @@ import {
 } from "../shared/native-contracts.js";
 import { headChefConfig, nativePresets } from "./native-presets.js";
 import { readProjectProfile, mergeWorkflowProfiles, type TeamService } from "./service.js";
+import { kitchenPermissionConfig } from "./permission-config.js";
 
 interface AcceptedMessage {
   agent: PluginHookAgent;
@@ -60,6 +61,7 @@ function nativeRouting(mode: NativeStart["routingMode"], profile: RoleProfileOve
 function coordinationConfig(
   config: PaseoAgentConfig,
   profile: NonNullable<Awaited<ReturnType<TeamService["listProjectPacks"]>>["headChefProfile"]>,
+  autonomyGuidance: string,
 ) {
   const guidance = [
     config.systemPrompt,
@@ -67,6 +69,7 @@ function coordinationConfig(
     "Do not call create_agent or spawn unmanaged subagents. Do not implement, edit, commit, or integrate changes in the source checkout. Request additional work through Kitchen's managed work-request routes. Answer Kitchen's requirements questions through its structured completion report.",
     "Read the actual Kitchen mission state before reporting progress. A completed Head Chef chat turn or a worker's claim is not mission completion. Report pending reviews, permissions, verification, and human acceptance as pending. Describe a finished result only when the actual Kitchen workflow has verified it; distinguish a verified integration candidate from final human acceptance. Never claim approval or bypass the final human gate.",
     profile.instructions,
+    autonomyGuidance,
     ...(profile.steps ?? []).map((step) => step.instructions),
     profile.skills?.length
       ? `Use these installed skills: ${profile.skills.join(", ")}. Report missing skills.`
@@ -133,9 +136,14 @@ export async function startNativeMission(
   const local = await readProjectProfile(input.cwd);
   const variant = project.workflows.find((value) => value.id === input.presetId);
   const profile = { ...project.headChefProfile, ...local.headChef, ...variant?.headChefProfile };
-  const config = headChefConfig(input.defaultAgentConfig, profile);
+  const config = await kitchenPermissionConfig(
+    paseo,
+    headChefConfig(input.defaultAgentConfig, profile),
+    input.cwd,
+    service.autonomySettings().autoAcceptPermissions,
+  );
   const boss = await workspace.agents.create({
-    config: coordinationConfig(config, profile),
+    config: coordinationConfig(config, profile, service.autonomyGuidance()),
     idempotencyKey: `${input.idempotencyKey}:head-chef`,
     labels: { "pandaos.routing.mode": nativeRouting(input.routingMode, profile) },
   });

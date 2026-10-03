@@ -2,7 +2,7 @@ import type { PaseoApi, PaseoClient } from "@getpaseo/client";
 import { connectLegacyClient } from "./server/legacy-client.js";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { isAbsolute } from "node:path";
-import { factorySettings } from "./shared/preferences.js";
+import { factorySettings, AutonomySettingsSchema } from "./shared/preferences.js";
 import { factoryWorkflowValidate } from "./shared/workflow-contracts.js";
 import { registerDashboard } from "./server/dashboard/register.js";
 import { registerFactory } from "./server/register.js";
@@ -32,8 +32,12 @@ export default function contribute(server: PluginServerContext) {
   };
   const removeDashboard = registerDashboard(server);
   let concurrency = 4;
+  let autonomy = AutonomySettingsSchema.parse({});
   const removeSettings = settings.subscribe((state) => {
-    if (state.status === "ready") concurrency = state.values.maxConcurrentAgents;
+    if (state.status === "ready") {
+      concurrency = state.values.maxConcurrentAgents;
+      autonomy = AutonomySettingsSchema.parse(state.values);
+    }
   });
   const systemOneConfig = async () => {
     const state = await settings.read();
@@ -60,6 +64,7 @@ export default function contribute(server: PluginServerContext) {
       const state = await settings.read();
       if (state.status !== "ready") throw new Error(state.error);
       concurrency = state.values.maxConcurrentAgents;
+      autonomy = AutonomySettingsSchema.parse(state.values);
       const directory = state.values.dataDirectory.trim() || host.dataDirectory;
       if (!directory || !isAbsolute(directory)) {
         throw new Error(
@@ -69,6 +74,7 @@ export default function contribute(server: PluginServerContext) {
       return directory;
     },
     maxConcurrentAgents: () => concurrency,
+    autonomySettings: () => autonomy,
     hostControl: async () => {
       const state = await settings.read();
       if (state.status !== "ready") throw new Error(state.error);

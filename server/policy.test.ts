@@ -6,6 +6,65 @@ import {
   type PolicyObservation,
 } from "./policy.js";
 import { verifyOperatorApproval } from "./approval.js";
+import { AutonomySettingsSchema } from "../shared/preferences.js";
+import {
+  isBlockingQuestion,
+  optionalQuestionDue,
+  type HumanQuestion,
+} from "../shared/question-policy.js";
+
+describe("Optional question policy", () => {
+  const question: HumanQuestion = {
+    id: "question-1",
+    revision: 1,
+    category: "clarification",
+    text: "Save or Apply?",
+    askedAt: "2026-10-03T12:00:00Z",
+    continueAt: "2026-10-03T12:01:00Z",
+  };
+  const now = new Date("2026-10-03T12:01:00Z");
+  it("enforces the deadline, started replies, wait mode and updated waiting periods", () => {
+    const defaults = AutonomySettingsSchema.parse({});
+    expect(defaults).toEqual({
+      autoAcceptPermissions: true,
+      optionalQuestionBehavior: "continue",
+      questionWaitSeconds: 60,
+    });
+    expect(optionalQuestionDue(question, defaults, new Date(now.getTime() - 1))).toBe(false);
+    expect(optionalQuestionDue(question, defaults, now)).toBe(true);
+    expect(
+      optionalQuestionDue({ ...question, responseStartedAt: question.askedAt }, defaults, now),
+    ).toBe(false);
+    expect(
+      optionalQuestionDue(question, { ...defaults, optionalQuestionBehavior: "wait" }, now),
+    ).toBe(false);
+    expect(optionalQuestionDue(question, { ...defaults, questionWaitSeconds: 120 }, now)).toBe(
+      false,
+    );
+    expect(optionalQuestionDue({ ...question, askedAt: "invalid" }, defaults, now)).toBe(false);
+  });
+  it.each([
+    "Password missing",
+    "OAuth consent",
+    "MFA code",
+    "Benutzername nötig",
+    "Approval to deploy",
+    "Merge now?",
+    "",
+  ])("keeps actual access or authorization questions open: %s", (text) => {
+    expect(isBlockingQuestion("clarification", text)).toBe(true);
+    expect(optionalQuestionDue({ ...question, text }, AutonomySettingsSchema.parse({}), now)).toBe(
+      false,
+    );
+  });
+  it("rejects invalid timeouts and honors explicit blocker categories", () => {
+    expect(AutonomySettingsSchema.safeParse({ questionWaitSeconds: 0 }).success).toBe(false);
+    expect(AutonomySettingsSchema.safeParse({ questionWaitSeconds: 3601 }).success).toBe(false);
+    expect(isBlockingQuestion("irreversible", "Proceed?")).toBe(true);
+    expect(isBlockingQuestion("access", "Continue?")).toBe(true);
+    expect(isBlockingQuestion("requirements", "Use a blue or purple button?")).toBe(false);
+  });
+});
 
 const observation: PolicyObservation = {
   activeMs: 200,

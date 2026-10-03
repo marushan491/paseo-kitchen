@@ -201,6 +201,7 @@ export const softwareBasicPack: WorkflowPack = validatePack({
         intake: { title: "Intake", kind: "resting", next: "plan" },
         plan: { title: "Plan", kind: "working", role: "po", outcomes: { planned: "execute" } },
         execute: { title: "Execute", kind: "resting", completeWithChildren: "done" },
+        blocked: { title: "Needs you", kind: "resting" },
         done: { title: "Done", kind: "terminal" },
         canceled: { title: "Canceled", kind: "terminal" },
       },

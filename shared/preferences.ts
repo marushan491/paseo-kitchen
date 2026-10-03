@@ -3,6 +3,12 @@ import { z } from "zod";
 
 export const DEFAULT_AGENT_CAPACITY = 4;
 export const AgentCapacitySchema = z.number().int().positive();
+export const AutonomySettingsSchema = z.object({
+  autoAcceptPermissions: z.boolean().default(true),
+  optionalQuestionBehavior: z.enum(["continue", "wait"]).default("continue"),
+  questionWaitSeconds: z.number().int().min(5).max(3600).default(60),
+});
+export type AutonomySettings = z.infer<typeof AutonomySettingsSchema>;
 
 export const factorySettings = defineSettings({
   id: "factory",
@@ -16,5 +22,6 @@ export const factorySettings = defineSettings({
     cliArguments: z.array(z.string()).default([]),
     packDirectory: z.string().default(""),
     maxConcurrentAgents: AgentCapacitySchema.default(DEFAULT_AGENT_CAPACITY),
+    ...AutonomySettingsSchema.shape,
   }),
 });

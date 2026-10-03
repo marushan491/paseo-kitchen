@@ -1,7 +1,7 @@
 import type { PaseoAgent } from "@getpaseo/client";
-import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
+import { type PluginSurfaceProps, useRpc, useSettings } from "@getpaseo/plugin/client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import type { Binding, TeamEvent, TeamState } from "../shared/factory-contracts.js";
 import {
@@ -14,6 +14,9 @@ import { missionActivity } from "../shared/mission-story.js";
 import { kitchenHumanRequests } from "../shared/dashboard/kitchen-scope.js";
 import { Action, Disclosure, Field, useFactoryStyles } from "./ui.js";
 import { missionStageColor, missionStageLabels } from "./mission-summary.js";
+import { factoryQuestionActivity } from "../shared/question-contracts.js";
+import { readHumanQuestion } from "../shared/question-policy.js";
+import { factorySettings } from "../shared/preferences.js";
 
 export function MissionStory(
   props: PluginSurfaceProps & {
@@ -316,7 +319,46 @@ export function MissionReply(
 ) {
   const styles = useFactoryStyles(props);
   const [text, setText] = useState("");
+  const [activityError, setActivityError] = useState(false);
   const cache = useQueryClient();
+  const activityRpc = useRpc(factoryQuestionActivity);
+  const settings = useSettings(factorySettings);
+  const waitsForAnswer =
+    settings.status !== "ready" || settings.values.optionalQuestionBehavior === "wait";
+  const started = useRef(new Set<string>());
+  const questions = kitchenHumanRequests([props.state]).filter((request) => !request.ready);
+  const beginReply = useCallback(() => {
+    const pending = Object.values(props.state.items)
+      .flatMap((item) =>
+        Object.values((item.pack.providerHumanQuestions ?? {}) as Record<string, unknown>).concat([
+          item.pack.nativeHumanQuestion,
+        ]),
+      )
+      .map(readHumanQuestion)
+      .filter((question) => question?.continueAt && !question.responseStartedAt);
+    const key = pending
+      .map((question) => question!.id)
+      .sort()
+      .join(",");
+    if (!key || started.current.has(key)) return;
+    started.current.add(key);
+    void activityRpc({ teamId: props.state.team.id, kind: "focus" })
+      .then(() => {
+        setActivityError(false);
+        return cache.invalidateQueries({ queryKey: ["factory"] });
+      })
+      .catch(() => {
+        started.current.delete(key);
+        setActivityError(true);
+      });
+  }, [activityRpc, cache, props.state.team.id, props.state.items]);
+  const changeText = useCallback(
+    (value: string) => {
+      beginReply();
+      setText(value);
+    },
+    [beginReply],
+  );
   const send = useMutation({
     mutationFn: props.onSend,
     onSuccess: async (_result, sent) => {
@@ -325,7 +367,6 @@ export function MissionReply(
     },
   });
   const submit = useCallback(() => send.mutate(text.trim()), [send, text]);
-  const questions = kitchenHumanRequests([props.state]).filter((request) => !request.ready);
   return (
     <View style={styles.stack}>
       {questions.map((request) => (
@@ -334,6 +375,11 @@ export function MissionReply(
           <Text selectable style={styles.text}>
             {request.reason}
           </Text>
+          {readHumanQuestion(request.item.pack.nativeHumanQuestion)?.continueAt ? (
+            <Text style={styles.muted}>
+              {questionReplyStatus(request.item.pack.nativeHumanQuestion, waitsForAnswer)}
+            </Text>
+          ) : null}
         </View>
       ))}
       <Text style={styles.muted}>
@@ -343,7 +389,8 @@ export function MissionReply(
         theme={props.theme}
         label="Message to Head Chef"
         value={text}
-        onChange={setText}
+        onChange={changeText}
+        onFocus={beginReply}
         multiline
         placeholder="Answer the question or clarify the desired outcome…"
       />
@@ -360,7 +407,19 @@ export function MissionReply(
           {String(send.error)}
         </Text>
       ) : null}
+      {activityError ? (
+        <Text accessibilityLiveRegion="polite" style={styles.danger}>
+          Your reply draft could not be synced. Reconnect or send your answer to hold this question.
+        </Text>
+      ) : null}
       {!props.canSend ? <Text style={styles.muted}>This mission is closed.</Text> : null}
     </View>
   );
+}
+
+function questionReplyStatus(value: unknown, waitsForAnswer: boolean) {
+  if (readHumanQuestion(value)?.responseStartedAt)
+    return "Your reply is in progress; Kitchen is waiting for you.";
+  if (waitsForAnswer) return "Kitchen is waiting for your answer.";
+  return "Kitchen will continue investigating after the waiting period. Start replying to hold this question.";
 }
