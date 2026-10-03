@@ -1,6 +1,18 @@
 import type { RoleWorkflow } from "../shared/role-builder.js";
 import type { WorkflowDefinition } from "../shared/workflow-contracts.js";
 
+export function clampGraphZoom(value: number): number {
+  return Math.max(1, Math.min(200, Math.round(value)));
+}
+export function fitGraphZoom(
+  width: number,
+  height: number,
+  viewportWidth: number,
+  viewportHeight: number,
+): number {
+  return clampGraphZoom(Math.min(1, viewportWidth / width, viewportHeight / height) * 92);
+}
+
 export type GraphPhase = RoleWorkflow["boards"][string]["phases"][string] &
   Partial<
     Pick<

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Animated, PanResponder, View, type LayoutChangeEvent } from "react-native";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
-import { clampZoom } from "./kitchen-stations.js";
+import { clampGraphZoom, fitGraphZoom } from "./role-graph-model.js";
 export function GraphViewport(
   props: PluginSurfaceProps & {
     width: number;
@@ -25,20 +25,27 @@ export function GraphViewport(
     startZoom: 100,
     distance: 0,
   });
-  const fit = Math.min(bounds.width / props.width, bounds.height / props.height) * 0.92;
+  const lastFit = useRef("");
+  const fit = fitGraphZoom(props.width, props.height, bounds.width, bounds.height);
+  const { onZoom } = props;
+  useEffect(() => {
+    const key = `${bounds.width}:${bounds.height}:${props.fitKey}`;
+    if (lastFit.current === key) return;
+    lastFit.current = key;
+    onZoom(fit);
+  }, [bounds.width, bounds.height, props.fitKey, fit, onZoom]);
   const layout = useCallback((event: LayoutChangeEvent) => setBounds(event.nativeEvent.layout), []);
   const { onScale } = props;
   useEffect(() => {
-    onScale?.((fit * props.zoom) / 100);
-    scale.setValue((fit * props.zoom) / 100);
+    onScale?.(props.zoom / 100);
+    scale.setValue(props.zoom / 100);
     gesture.current.zoom = props.zoom;
-  }, [fit, scale, props.zoom, onScale]);
+  }, [scale, props.zoom, onScale]);
   useEffect(() => {
     translation.setValue({ x: 0, y: 0 });
     gesture.current.x = 0;
     gesture.current.y = 0;
   }, [translation, props.fitKey]);
-  const { onZoom } = props;
   const responder = useMemo(
     () =>
       PanResponder.create({
@@ -65,8 +72,8 @@ export function GraphViewport(
               touches[0].pageY - touches[1].pageY,
             );
             if (!value.distance) value.distance = distance;
-            value.zoom = clampZoom((value.startZoom * distance) / Math.max(1, value.distance));
-            scale.setValue((fit * value.zoom) / 100);
+            value.zoom = clampGraphZoom((value.startZoom * distance) / Math.max(1, value.distance));
+            scale.setValue(value.zoom / 100);
           } else {
             value.x = value.originX + state.dx;
             value.y = value.originY + state.dy;
@@ -76,7 +83,7 @@ export function GraphViewport(
         onPanResponderRelease: () => onZoom(gesture.current.zoom),
         onPanResponderTerminationRequest: () => true,
       }),
-    [fit, onZoom, scale, translation],
+    [onZoom, scale, translation],
   );
   const styles = useMemo(
     () => ({

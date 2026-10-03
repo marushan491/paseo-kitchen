@@ -5,8 +5,8 @@ import type { RoleWorkflow } from "../shared/role-builder.js";
 import { Action, Field, SurfaceSheet, useFactoryStyles } from "./ui.js";
 import { Choice } from "./choice.js";
 import { GraphViewport } from "./graph-viewport.js";
-import { clampZoom } from "./kitchen-stations.js";
 import {
+  clampGraphZoom,
   graphConnections,
   layoutRoleGraph,
   updateGraphConnection,
@@ -78,16 +78,15 @@ export function RoleGraph(props: RoleGraphProps) {
   const dismiss = useCallback(() => setSelected(null), []);
   const dismissPhase = useCallback(() => setPhase(""), []);
   const changeZoom = useCallback(
-    (amount: number) => setZoom((value) => clampZoom(value + amount)),
+    (amount: number) => setZoom((value) => clampGraphZoom(value + amount)),
     [],
   );
+  const naturalSize = useCallback(() => setZoom(100), []);
   const fit = useCallback(() => {
-    setZoom(100);
     setFitKey((value) => value + 1);
   }, []);
   const arrange = useCallback(() => {
     setPositions({});
-    setZoom(100);
     setFitKey((value) => value + 1);
   }, []);
   const moveNode = useCallback(
@@ -99,7 +98,6 @@ export function RoleGraph(props: RoleGraphProps) {
     setPositions({});
     setSelected(null);
     setPhase("");
-    setZoom(100);
     setFitKey((key) => key + 1);
   }, []);
   const options = useMemo(() => boards.map((id) => ({ id, title: boardTitle(id) })), [boards]);
@@ -141,7 +139,7 @@ export function RoleGraph(props: RoleGraphProps) {
               accessibilityLabel="Graph zoom out"
               value={-10}
               onAction={changeZoom}
-              disabled={zoom <= 60}
+              disabled={zoom <= 1}
               compact={props.layout.compact}
             />
             <Text style={toolbarStyles.zoom}>{zoom}%</Text>
@@ -151,7 +149,16 @@ export function RoleGraph(props: RoleGraphProps) {
               accessibilityLabel="Graph zoom in"
               value={10}
               onAction={changeZoom}
-              disabled={zoom >= 180}
+              disabled={zoom >= 200}
+              compact={props.layout.compact}
+            />
+            <Action
+              theme={props.theme}
+              title="1:1"
+              accessibilityLabel="Workflow graph actual size"
+              value="actual-size"
+              onAction={naturalSize}
+              selected={zoom === 100}
               compact={props.layout.compact}
             />
             <Action

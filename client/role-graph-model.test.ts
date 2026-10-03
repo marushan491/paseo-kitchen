@@ -1,6 +1,12 @@
 import { expect, it } from "vitest";
 import type { RoleWorkflow } from "../shared/role-builder.js";
-import { graphConnections, layoutRoleGraph, updateGraphConnection } from "./role-graph-model.js";
+import {
+  clampGraphZoom,
+  fitGraphZoom,
+  graphConnections,
+  layoutRoleGraph,
+  updateGraphConnection,
+} from "./role-graph-model.js";
 const workflow: RoleWorkflow = {
   maxParallel: 4,
   roles: {
@@ -94,4 +100,21 @@ it("preserves conditional skip paths and reroutes the visual edges after arrangi
   expect(updateGraphConnection(conditional, skip, "build").boards.item.phases.review).toMatchObject(
     { condition: { any: [{ prefix: "auth/" }] }, skipTo: "build" },
   );
+});
+
+it("fits long boards while allowing actual-size inspection independently of the kitchen map", () => {
+  for (const board of ["root", "item"]) {
+    const graph = layoutRoleGraph(
+      { ...workflow, boards: { [board]: workflow.boards.item } },
+      board,
+    );
+    const fit = fitGraphZoom(graph.width, graph.height, 640, 420);
+    expect(fit).toBeLessThan(100);
+    expect((graph.width * fit) / 100).toBeLessThanOrEqual(640);
+    expect((graph.height * fit) / 100).toBeLessThanOrEqual(420);
+    expect(clampGraphZoom(100) / 100).toBe(1);
+    expect(clampGraphZoom(200) / 100).toBe(2);
+    expect(clampGraphZoom(500)).toBe(200);
+    expect(clampGraphZoom(0)).toBe(1);
+  }
 });
