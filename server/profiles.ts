@@ -73,6 +73,8 @@ export class WorkflowProfiles {
         },
       });
     const resolved = { ...base, ...patch };
+    if ((patch.provider || patch.model) && patch.routingMode === undefined)
+      resolved.routingMode = "manual";
     if (
       resolved.steps &&
       new Set(resolved.steps.map((step) => step.id)).size !== resolved.steps.length

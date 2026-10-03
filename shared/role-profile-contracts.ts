@@ -7,6 +7,7 @@ export const WorkflowStepSchema = z.object({
 export const RoleProfileOverrideSchema = z.object({
   provider: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
+  routingMode: z.enum(["auto", "manual"]).optional(),
   thinking: z.string().min(1).optional(),
   mode: z.string().min(1).optional(),
   workflowProfileId: z.string().min(1).optional(),

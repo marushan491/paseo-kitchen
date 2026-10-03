@@ -1,12 +1,17 @@
 import { readAgentRoutingNotice, type AgentRoutingNotice } from "../shared/agent-routing.js";
 import { z } from "zod";
 import type { AgentPromptInput } from "@getpaseo/protocol/agent-types";
-import type { FactoryCompletionSchema } from "../shared/factory-contracts.js";
+import {
+  TEAM_ITEM_LABEL,
+  TEAM_LABEL,
+  type FactoryCompletionSchema,
+} from "../shared/factory-contracts.js";
 import { parseFactoryCompletion } from "./completion.js";
 import { realpath } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { createHostControl } from "./host-control.js";
 import type { HostControlOptions } from "./host-control.js";
-import type { PaseoAgentCreateOptions } from "@getpaseo/client";
+import type { PaseoAgentCreateOptions, PaseoWorkspaceHandle } from "@getpaseo/client";
 import type { PaseoApi, PaseoAgent } from "@getpaseo/client";
 import { kitchenPermissionConfig } from "./permission-config.js";
 export interface FactoryAgent {
@@ -38,6 +43,7 @@ export interface FactoryCreate {
   initialPrompt?: string;
   thinking?: string;
   mode?: string;
+  routingMode?: "auto" | "manual";
   autoAcceptPermissions?: boolean;
   labels: Record<string, string>;
   parentAgentId?: string;
@@ -108,6 +114,92 @@ export function sdkController(
           archivedAt: value.archivingAt,
         }
       : null;
+  };
+  const checkedWorkspace = async (id: string, cwd: string, projectId?: string) => {
+    const handle = paseo.workspaces.ref(id);
+    const value = await handle.refresh();
+    if (
+      !value ||
+      value.id !== id ||
+      value.archivingAt ||
+      (projectId && value.projectId !== projectId) ||
+      (await realpath(value.workspaceDirectory ?? value.projectRootPath)) !== (await realpath(cwd))
+    )
+      throw new Error("Kitchen workspace must match its active project and execution directory");
+    return { handle, value };
+  };
+  const itemWorkspace = async (
+    input: FactoryCreate,
+    directory: string,
+    projectId: string,
+  ): Promise<PaseoWorkspaceHandle> => {
+    const teamId = input.labels[TEAM_LABEL];
+    const itemId = input.labels[TEAM_ITEM_LABEL];
+    if (!teamId || !itemId)
+      throw new Error(
+        "A Kitchen checkout outside its parent requires a team and work item identity",
+      );
+    if (input.workspaceId)
+      return (await checkedWorkspace(input.workspaceId, directory, projectId)).handle;
+    let cursor: string | undefined;
+    do {
+      const page = await paseo.agents.list({
+        filter: {
+          labels: { [TEAM_LABEL]: teamId, [TEAM_ITEM_LABEL]: itemId },
+          includeArchived: false,
+        },
+        page: { limit: 200, cursor },
+      });
+      for (const { agent } of page.entries) {
+        if (
+          agent.archivedAt ||
+          !agent.workspaceId ||
+          agent.labels[TEAM_LABEL] !== teamId ||
+          agent.labels[TEAM_ITEM_LABEL] !== itemId ||
+          (await realpath(agent.cwd)) !== directory
+        )
+          continue;
+        return (await checkedWorkspace(agent.workspaceId, directory, projectId)).handle;
+      }
+      cursor = page.pageInfo.nextCursor ?? undefined;
+    } while (cursor);
+    const identity = createHash("sha256")
+      .update(JSON.stringify([teamId, itemId, directory]))
+      .digest("hex");
+    const title = input.title.includes(" · ")
+      ? input.title.split(" · ").slice(1).join(" · ")
+      : input.title;
+    const created = await paseo.workspaces.create({
+      idempotencyKey: `kitchen-item:${identity}`,
+      title,
+      source: { kind: "directory", path: input.cwd, projectId },
+    });
+    return (await checkedWorkspace(created.id, directory, projectId)).handle;
+  };
+  const placementFor = async (input: FactoryCreate): Promise<PaseoWorkspaceHandle | null> => {
+    if (input.worktree) return null;
+    if (!input.parentAgentId)
+      return input.workspaceId
+        ? (await checkedWorkspace(input.workspaceId, input.cwd)).handle
+        : null;
+    const parent = await paseo.agents.ref(input.parentAgentId).refresh();
+    if (
+      !parent ||
+      parent.agent.id !== input.parentAgentId ||
+      parent.agent.archivedAt ||
+      !parent.agent.workspaceId ||
+      (parent.agent.labels[TEAM_LABEL] &&
+        parent.agent.labels[TEAM_LABEL] !== input.labels[TEAM_LABEL])
+    )
+      throw new Error("Kitchen parent must belong to the selected active mission and workspace");
+    const selected = await checkedWorkspace(parent.agent.workspaceId, parent.agent.cwd);
+    const directory = await realpath(input.cwd);
+    if ((await realpath(parent.agent.cwd)) === directory) {
+      if (input.workspaceId && input.workspaceId !== parent.agent.workspaceId)
+        throw new Error("Kitchen child must use its parent's selected workspace");
+      return selected.handle;
+    }
+    return itemWorkspace(input, directory, selected.value.projectId);
   };
   return {
     cancel: host.cancel,
@@ -197,7 +289,12 @@ export function sdkController(
         cwd: input.cwd,
         parent: input.parentAgentId,
         title: input.title,
-        labels: input.labels,
+        labels: {
+          ...input.labels,
+          "pandaos.routing.mode":
+            input.routingMode ??
+            (input.labels["pandaos.routing.mode"] === "auto" ? "auto" : "manual"),
+        },
         prompt: input.initialPrompt,
         worktree: input.worktree
           ? {
@@ -207,9 +304,7 @@ export function sdkController(
             }
           : undefined,
       };
-      let placement = input.workspaceId ? paseo.workspaces.ref(input.workspaceId) : null;
-      if (!placement && input.parentAgentId && !input.worktree)
-        placement = await paseo.workspaces.open(input.cwd);
+      const placement = await placementFor(input);
       const created = placement
         ? await placement.agents.create(options)
         : await paseo.agents.create(options);

@@ -6,7 +6,7 @@ import { AutonomySettingsSchema } from "../shared/preferences.js";
 import { readHumanQuestion } from "../shared/question-policy.js";
 import { workflowOf } from "./workflow-metadata.js";
 import { workflowConnections, roleTemplate } from "../shared/role-builder.js";
-import { FactoryWorkflowSchema } from "../shared/factory-contracts.js";
+import { FactoryWorkflowSchema, type RoleProfileOverride } from "../shared/factory-contracts.js";
 import { kitchenPack } from "./pack.js";
 import { publishCandidate } from "./publication.js";
 import { captureTrackedFiles } from "./evidence.js";
@@ -32,6 +32,7 @@ interface FakeRecord {
   runtimeInfo?: { model: string };
   currentModeId?: string;
   thinkingOptionId?: string;
+  routingMode?: "auto" | "manual";
   routingNotice?: { status: "waiting"; reason: string; resetsAt: string };
 }
 
@@ -63,6 +64,7 @@ function fakeHost(base = "/repo") {
         cwd?: string;
         mode?: string;
         thinking?: string;
+        routingMode?: "auto" | "manual";
         worktree?: { worktreeName?: string };
       }) => {
         n += 1;
@@ -75,6 +77,7 @@ function fakeHost(base = "/repo") {
           labels: input.labels ?? {},
           currentModeId: input.mode,
           thinkingOptionId: input.thinking,
+          routingMode: input.routingMode,
         };
         records.set(record.id, record);
         created.push(record);
@@ -420,6 +423,157 @@ describe("TeamService", () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it.each(["continue", "wait"] as const)(
+    "dispatches independent ready work immediately while an access question waits under %s policy",
+    async (optionalQuestionBehavior) => {
+      const host = fakeHost(root);
+      const svc = new TeamService({
+        ...(host.options as unknown as TeamServiceOptions),
+        storageRoot: root,
+        inputActivitySupported: true,
+        maxConcurrentAgents: () => 1,
+        autonomySettings: () => AutonomySettingsSchema.parse({ optionalQuestionBehavior }),
+      });
+      await svc.start();
+      const started = await svc.startTeam({
+        bossAgentId: "boss",
+        title: "Independent access checks",
+        objective: "Complete scoped independent tasks",
+      });
+      await svc.trackProviderQuestion("boss", { id: "login", text: "Complete OAuth login" });
+      await svc.dispatchAll();
+      const po = host.agentFor("po");
+      expect(po).toBeDefined();
+      await svc.report(po.id, { outcome: "planned", summary: "Three scoped tasks" }, [
+        {
+          key: "A",
+          title: "Authenticated import",
+          objective: "Read authenticated source",
+          acceptanceCriteria: ["Source read"],
+        },
+        {
+          key: "B",
+          title: "Local display",
+          objective: "Build local display independently",
+          acceptanceCriteria: ["Display works"],
+        },
+        {
+          key: "C",
+          title: "Import display",
+          objective: "Display authenticated source",
+          acceptanceCriteria: ["Imported source shown"],
+          dependsOn: ["A"],
+        },
+      ]);
+      await svc.dispatchAll();
+      const before = (await svc.status(started.team.id)).state;
+      const work = itemByKey(before, "A");
+      expect(work.phase).toBe("implement");
+      expect(itemByKey(before, "B").phase).toBe("ready");
+      const developer = host.agentFor("developer", "A", before);
+      await svc.report(developer.id, {
+        outcome: "done",
+        summary: "Configured source requires user login",
+        needs: { kind: "human", category: "access", text: "Complete OAuth login" },
+      });
+      await svc.dispatchAll();
+      const after = (await svc.status(started.team.id)).state;
+      expect(after.team.status).toBe("active");
+      expect(after.items[work.id]!.phase).toBe("blocked");
+      const question = readHumanQuestion(after.items[work.id]!.pack.nativeHumanQuestion)!;
+      expect(question.category).toBe("access");
+      expect(question.continueAt).toBeUndefined();
+      expect(itemByKey(after, "B").phase).toBe("implement");
+      expect(host.agentFor("developer", "B", after)).toBeDefined();
+      expect(itemByKey(after, "C").phase).toBe("ready");
+      expect(host.agentFor("developer", "C", after)).toBeUndefined();
+      expect(
+        (
+          after.items[after.team.rootItemId]!.pack.providerHumanQuestions as Record<string, unknown>
+        )["boss:login"],
+      ).toBeDefined();
+      expect(after.items[work.id]!.reports.some((report) => report.outcome === "answer")).toBe(
+        false,
+      );
+      await svc.shutdown();
+    },
+  );
+
+  it.each([
+    { name: "inherits Chef Auto", override: undefined, expected: "auto" },
+    {
+      name: "inherits Chef Auto with role instructions",
+      override: { instructions: "Inspect requirements" },
+      expected: "auto",
+    },
+    {
+      name: "fixes an explicit provider and model",
+      override: { provider: "opencode", model: "opencode/free-test-model" },
+      expected: "manual",
+    },
+    {
+      name: "fixes an explicit model",
+      override: { model: "opencode/other-free-test-model" },
+      expected: "manual",
+    },
+    {
+      name: "honors explicit role Auto",
+      override: { provider: "opencode", model: "opencode/free-test-model", routingMode: "auto" },
+      expected: "auto",
+    },
+    { name: "honors explicit role Fixed", override: { routingMode: "manual" }, expected: "manual" },
+  ])("Cook routing $name", async ({ override, expected }) => {
+    const host = fakeHost(root);
+    const boss = (await host.options.controller.get("boss"))!;
+    boss.provider = "opencode";
+    boss.runtimeInfo = { model: "opencode/free-test-model" };
+    boss.labels["pandaos.routing.mode"] = "auto";
+    const svc = makeService(root, host);
+    await svc.start();
+    const started = await svc.startTeam({
+      bossAgentId: "boss",
+      title: "Inventory search",
+      objective: "Implement inventory search",
+      roleProfiles: override ? { po: override as RoleProfileOverride } : undefined,
+    });
+    await svc.dispatchAll();
+    expect(started.team.roleProfiles.po!.routingMode).toBe(expected);
+    const po = host.agentFor("po");
+    expect(po.routingMode).toBe(expected);
+    const binding = Object.values((await svc.status(started.team.id)).state.bindings).find(
+      (entry) => entry.agentId === po.id,
+    )!;
+    expect(binding.executedProfile!.routingMode).toBe(expected);
+    await svc.shutdown();
+  });
+
+  it("persists Auto role presets and fixes legacy provider presets without an Auto selection", async () => {
+    const svc = makeService(root, fakeHost(root));
+    await svc.profiles.save({
+      id: "automatic",
+      name: "Automatic planner",
+      profile: { provider: "opencode", model: "opencode/free-test-model", routingMode: "auto" },
+    });
+    await svc.profiles.save({
+      id: "fixed",
+      name: "Fixed planner",
+      profile: { provider: "opencode", model: "opencode/free-test-model" },
+    });
+    const restored = makeService(root, fakeHost(root));
+    const base = {
+      provider: "opencode",
+      model: "opencode/other-free-test-model",
+      routingMode: "auto" as const,
+    };
+    expect(await restored.profiles.resolve(base, { workflowProfileId: "automatic" })).toMatchObject(
+      { routingMode: "auto", model: "opencode/free-test-model" },
+    );
+    expect(await restored.profiles.resolve(base, { workflowProfileId: "fixed" })).toMatchObject({
+      routingMode: "manual",
+      model: "opencode/free-test-model",
+    });
+  });
+
   it("maps a named role to an executable slot, carries its brief into the actual prompt and keeps verification returns", async () => {
     const host = fakeHost();
     const svc = makeService(root, host);
@@ -541,6 +695,7 @@ describe("TeamService", () => {
     const po = host.agentFor("po");
     expect(po).toMatchObject({
       provider: "codex/host-model",
+      routingMode: "manual",
       currentModeId: "read-only",
       thinkingOptionId: "high",
     });
@@ -553,19 +708,22 @@ describe("TeamService", () => {
       started.team.id,
       started.team.rootItemId,
       "po",
-      { instructions: "Next binding only", thinking: "low" },
+      { instructions: "Next binding only", thinking: "low", routingMode: "auto" },
       "human",
     );
     const binding = Object.values(configured.bindings).find((entry) => entry.agentId === po.id)!;
     expect(binding.executedProfile).toMatchObject({
       instructions: "Keep tasks bounded",
       thinking: "high",
+      routingMode: "manual",
     });
     expect(configured.items[started.team.rootItemId]!.roleProfiles!.po).toMatchObject({
       instructions: "Next binding only",
       thinking: "low",
+      routingMode: "auto",
     });
     expect(po.thinkingOptionId).toBe("high");
+    expect(po.routingMode).toBe("manual");
     await svc.onTurnEnded(started.team.id, po.id, false);
     await svc.dispatchAll();
     expect(host.prompts.at(-1)!.prompt).toContain("Keep tasks bounded");
@@ -1680,6 +1838,200 @@ describe("Kitchen runtime", () => {
   afterEach(async () => {
     await stopKitchenServices();
     await rm(root, { recursive: true, force: true });
+  });
+
+  it.each(["research", "split"] as const)(
+    "corrects an unregistered %s wait once without reporting the binding or trapping the Cook",
+    async (kind) => {
+      const host = kitchenFakeHost();
+      const service = makeKitchenService(root, host);
+      const started = await service.startKitchen({
+        title: "Registered work only",
+        objective: "Deliver verified scoped work",
+        cwd: root,
+        provider: "opencode",
+        idempotencyKey: "research-correction",
+        workflowMode: "self-organizing",
+        acceptanceCriteria: [{ id: "goal", text: "Scoped work is verified" }],
+      });
+      await service.dispatchAll();
+      await service.report(host.agentFor("po").id, { outcome: "planned", summary: "One item" }, [
+        {
+          key: "A",
+          title: "Feature",
+          objective: "Complete feature",
+          acceptanceCriteria: ["Feature works"],
+        },
+      ]);
+      await service.dispatchAll();
+      const before = (await service.status(started.team.id)).state;
+      const item = itemByKey(before, "A");
+      const developer = host.agentFor("developer", "A", before);
+      const bindingId = item.bindings.developer!;
+      const agentsBefore = host.created.length;
+      let feedback = "";
+      try {
+        await service.report(developer.id, {
+          outcome: "done",
+          summary: "Waiting for nonexistent child",
+          needs: { kind, text: "A helper is investigating" },
+        });
+      } catch (error) {
+        feedback = factoryValidationFeedback(error);
+      }
+      expect(feedback).toContain("unfinished registered work request");
+      const rejected = (await service.status(started.team.id)).state;
+      expect(rejected.items[item.id]!.phase).toBe("implement");
+      expect(rejected.bindings[bindingId]!.turn).toBe("running");
+      expect(rejected.items[item.id]!.reports).toEqual([]);
+      expect(rejected.items[item.id]!.pack.nativeHumanQuestion).toBeUndefined();
+      await service.onTurnEnded(started.team.id, developer.id, false, undefined, feedback);
+      await service.dispatchAll();
+      const retried = (await service.status(started.team.id)).state;
+      expect(retried.bindings[bindingId]!.turn).toBe("running");
+      expect(retried.bindings[bindingId]!.nudges).toBe(1);
+      expect(host.created).toHaveLength(agentsBefore);
+      expect(host.prompts.findLast((prompt) => prompt.agentId === developer.id)!.prompt).toContain(
+        feedback,
+      );
+      expect(
+        Object.values(retried.decisions).filter((decision) => decision.payload.nudge),
+      ).toHaveLength(1);
+      await service.report(
+        developer.id,
+        {
+          outcome: "done",
+          summary: "Actual scoped dependency registered",
+          needs: { kind, text: "Waiting for the recorded child" },
+        },
+        undefined,
+        [
+          {
+            requestId: "actual-helper",
+            title: "Helper",
+            objective: "Complete scoped helper",
+            acceptanceCriteria: ["Helper is verified"],
+          },
+        ],
+      );
+      await service.dispatchAll();
+      const waiting = (await service.status(started.team.id)).state;
+      expect(waiting.items[item.id]!.phase).toBe("waiting-for-work");
+      expect(waiting.bindings[bindingId]!.turn).toBe("reported");
+      expect(
+        Object.values(waiting.items).filter((child) => child.parentId === item.id),
+      ).toHaveLength(1);
+      expect(waiting.team.status).toBe("active");
+    },
+  );
+
+  it("recovers a mixed research blocker through Team chat without replacing the plan or accepting missing evidence", async () => {
+    const host = kitchenFakeHost();
+    const service = makeKitchenService(root, host);
+    const started = await service.startKitchen({
+      title: "Scoped inventory",
+      objective: "Complete inventory before dependent work",
+      cwd: root,
+      provider: "opencode",
+      idempotencyKey: "mixed-blocker",
+      workflowMode: "self-organizing",
+      acceptanceCriteria: [{ id: "goal", text: "Scoped work is verified" }],
+    });
+    await service.dispatchAll();
+    await service.report(host.agentFor("po").id, { outcome: "planned", summary: "Scoped plan" }, [
+      {
+        key: "A",
+        title: "Inventory",
+        objective: "Verify builds and record public IDs",
+        acceptanceCriteria: ["Phone shells build", "Unknown public IDs stay explicitly unknown"],
+      },
+      ...Array.from({ length: 31 }, (_, index) => ({
+        key: `NEXT-${index}`,
+        title: `Dependent task ${index}`,
+        objective: "Deliver scoped dependent behavior",
+        acceptanceCriteria: ["Behavior works"],
+        dependsOn: ["A"],
+      })),
+    ]);
+    await service.dispatchAll();
+    const initial = (await service.status(started.team.id)).state;
+    const inventory = itemByKey(initial, "A");
+    const originalItems = Object.keys(initial.items).sort();
+    const developer = host.agentFor("developer", "A", initial);
+    developer.workspaceId = "owned-inventory-workspace";
+    const ownedCwd = developer.cwd;
+    await service.report(developer.id, {
+      outcome: "done",
+      summary: "Inventory recorded with unknown portal ID; simulator evidence missing",
+      needs: {
+        kind: "human",
+        text: "Waiting for an unregistered simulator child and a portal issuer ID",
+      },
+    });
+    await service.dispatchAll();
+    await service.store.commit(started.team.id, (draft) => {
+      delete draft.items[inventory.id]!.pack.nativeHumanQuestion;
+      return { events: [], result: null };
+    });
+    const blocked = (await service.status(started.team.id)).state;
+    expect(blocked.items[inventory.id]!.phase).toBe("blocked");
+    expect(blocked.items[inventory.id]!.pack.nativeHumanQuestion).toBeUndefined();
+    expect(Object.values(blocked.items).filter((item) => item.parentId === inventory.id)).toEqual(
+      [],
+    );
+    expect(
+      Object.values(blocked.decisions).every(
+        (decision) => !["retry", "failed"].includes(decision.status),
+      ),
+    ).toBe(true);
+    const agentsBefore = host.created.length;
+    const instruction =
+      "Continue inventory against its actual criteria. Unknown IDs remain unknown. Register the missing simulator workRequest; portal login remains unresolved and belongs only to work that requires it. Continue satisfiable work without inventing evidence.";
+    await service.message(started.team.id, instruction, { type: "human", id: "operator" });
+    await service.dispatchAll();
+    const resumed = (await service.status(started.team.id)).state;
+    expect(Object.keys(resumed.items).sort()).toEqual(originalItems);
+    expect(resumed.items[inventory.id]!.phase).toBe("implement");
+    expect(resumed.items[inventory.id]!.bindings.developer).toBe(inventory.bindings.developer);
+    expect(host.created).toHaveLength(agentsBefore);
+    expect(host.records.get(developer.id)).toMatchObject({
+      cwd: ownedCwd,
+      workspaceId: "owned-inventory-workspace",
+    });
+    expect(
+      resumed.items[inventory.id]!.acceptanceCriteria.every(
+        (criterion) => !criterion.met && !criterion.evidence,
+      ),
+    ).toBe(true);
+    expect(host.prompts.findLast((prompt) => prompt.agentId === developer.id)!.prompt).toContain(
+      instruction,
+    );
+    const request = {
+      requestId: "simulator-finish",
+      title: "Finish simulator build evidence",
+      objective: "Execute the missing authorized simulator build",
+      acceptanceCriteria: ["Actual build transcript identifies the candidate"],
+    };
+    await service.requestWork(developer.id, request);
+    await service.requestWork(developer.id, request);
+    await service.report(developer.id, {
+      outcome: "done",
+      summary: "Waiting for recorded verification work",
+      needs: { kind: "research", text: "Simulator evidence must be verified" },
+    });
+    await service.dispatchAll();
+    const waiting = (await service.status(started.team.id)).state;
+    expect(waiting.items[inventory.id]!.phase).toBe("waiting-for-work");
+    const children = Object.values(waiting.items).filter((item) => item.parentId === inventory.id);
+    expect(children).toHaveLength(1);
+    expect(children[0]!.phase).toBe("implement");
+    expect(originalItems.every((id) => waiting.items[id])).toBe(true);
+    expect(
+      Object.values(waiting.items)
+        .filter((item) => item.pack.key?.toString().startsWith("NEXT-"))
+        .every((item) => item.phase === "ready" && item.dependsOn[0]!.id === inventory.id),
+    ).toBe(true);
+    expect(waiting.items[inventory.id]!.pack.verifiedCommit).toBeUndefined();
   });
 
   it("reuses a native HeadChef and deduplicates accepted followups without claiming human authority", async () => {

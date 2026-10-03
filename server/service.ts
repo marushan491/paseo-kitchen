@@ -2241,6 +2241,7 @@ export class TeamService {
               payload.needs.category,
             );
         }
+        if (item.phase === "blocked") schedule(draft, this.pack(draft.team), events);
         return {
           events,
           result: `Report accepted. ${item.title} is now in ${item.phase}. Stop here.`,
@@ -3195,6 +3196,7 @@ export class TeamService {
         cwd,
         thinking: profile.thinking,
         mode: profile.mode,
+        routingMode: profile.routingMode,
         autoAcceptPermissions: this.autonomySettings().autoAcceptPermissions,
         labels: {
           [TEAM_LABEL]: state.team.id,
@@ -3771,6 +3773,7 @@ function bossProfile(boss: FactoryAgent): Team["roleProfiles"][string] {
     model: boss.runtimeInfo?.model ?? boss.model ?? undefined,
     mode: boss.currentModeId ?? boss.runtimeInfo?.modeId ?? undefined,
     thinking: boss.thinkingOptionId ?? boss.runtimeInfo?.thinkingOptionId ?? undefined,
+    routingMode: boss.labels["pandaos.routing.mode"] === "auto" ? "auto" : "manual",
   };
 }
 

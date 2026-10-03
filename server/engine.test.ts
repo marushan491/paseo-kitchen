@@ -93,6 +93,85 @@ function verifyItem(state: TeamState, item: WorkItem, events: TeamEventDraft[]) 
 }
 
 describe("Kitchen workflow", () => {
+  it.each(["research", "split"] as const)(
+    "rejects a %s report without registered work before changing evidence or the running binding",
+    (kind) => {
+      const { state, events, item, developer } = planned();
+      const before = structuredClone(state);
+      const previousEvents = structuredClone(events);
+      expect(() =>
+        applyReport(
+          state,
+          kitchenPack,
+          developer,
+          {
+            outcome: "done",
+            summary: "Waiting for an unregistered child",
+            artifacts: [{ kind: "commit", ref: COMMIT }],
+            criteria: [{ id: "A-1", met: true, evidence: "Unverified claim" }],
+            needs: { kind, text: "A helper will finish this" },
+          },
+          events,
+        ),
+      ).toThrow("unfinished registered work request");
+      expect(state).toEqual(before);
+      expect(events).toEqual(previousEvents);
+      expect(item.phase).toBe("implement");
+      expect(developer.turn).toBe("running");
+    },
+  );
+
+  it("keeps genuine access requests as a human blocker without requiring a delegated child", () => {
+    const { state, events, item, developer } = planned();
+    applyReport(
+      state,
+      kitchenPack,
+      developer,
+      {
+        outcome: "done",
+        summary: "Authentication needs the user",
+        needs: { kind: "human", category: "access", text: "Complete OAuth consent" },
+      },
+      events,
+    );
+    expect(item.phase).toBe("blocked");
+    expect(developer.turn).toBe("reported");
+    expect(state.team.status).toBe("active");
+  });
+
+  it("rejects another research wait after all registered children are verified", () => {
+    const { state, events, item, developer } = planned();
+    const child = requestWork(
+      state,
+      kitchenPack,
+      developer,
+      {
+        requestId: "helper",
+        title: "Helper",
+        objective: "Finish helper",
+        acceptanceCriteria: ["Helper works"],
+      },
+      events,
+    );
+    child.phase = kitchenPack.dependencyPhase!;
+    child.pack.verifiedCommit = COMMIT;
+    expect(() =>
+      applyReport(
+        state,
+        kitchenPack,
+        developer,
+        {
+          outcome: "done",
+          summary: "Still waiting",
+          needs: { kind: "research", text: "More investigation" },
+        },
+        events,
+      ),
+    ).toThrow("unfinished registered work request");
+    expect(item.phase).toBe("implement");
+    expect(developer.turn).toBe("running");
+  });
+
   it("keeps software-basic registered and finishes only after independent verification", () => {
     expect(new PackRegistry().list().map((pack) => pack.id)).toEqual([
       "software-basic",

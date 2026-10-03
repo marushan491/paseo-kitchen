@@ -1,11 +1,148 @@
-import { expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { afterEach, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PaseoApi, PaseoAgentConfig, PaseoAgentCreateOptions } from "@getpaseo/client";
 import { sdkController } from "./controller.js";
 import { createHostControl } from "./host-control.js";
 import { kitchenPermissionConfig } from "./permission-config.js";
+import { TEAM_ITEM_LABEL, TEAM_LABEL } from "../shared/factory-contracts.js";
+import type { FactoryCreate } from "./controller.js";
+
+const placementDirectories: string[] = [];
+afterEach(async () => {
+  await Promise.all(
+    placementDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
+  );
+});
+
+async function placementFixture() {
+  const cwd = await mkdtemp(join(tmpdir(), "kitchen-placement-"));
+  placementDirectories.push(cwd);
+  const child = join(cwd, "feature");
+  await mkdir(child);
+  const workspaces = new Map([
+    [
+      "parent-workspace",
+      {
+        id: "parent-workspace",
+        projectId: "project",
+        workspaceDirectory: cwd,
+        projectRootPath: cwd,
+        archivingAt: null as string | null,
+      },
+    ],
+    [
+      "sibling-workspace",
+      {
+        id: "sibling-workspace",
+        projectId: "project",
+        workspaceDirectory: cwd,
+        projectRootPath: cwd,
+        archivingAt: null as string | null,
+      },
+    ],
+  ]);
+  const records = new Map<
+    string,
+    {
+      id: string;
+      provider: string;
+      cwd: string;
+      workspaceId: string | null;
+      labels: Record<string, string>;
+      archivedAt?: string | null;
+    }
+  >([
+    [
+      "boss",
+      {
+        id: "boss",
+        provider: "opencode",
+        cwd,
+        workspaceId: "parent-workspace",
+        labels: { [TEAM_LABEL]: "team-a" },
+      },
+    ],
+  ]);
+  const calls: Array<{ workspaceId: string; options: PaseoAgentCreateOptions }> = [];
+  const ref = vi.fn((id: string) => ({
+    id,
+    refresh: async () => workspaces.get(id) ?? null,
+    agents: {
+      create: async (options: PaseoAgentCreateOptions) => {
+        calls.push({ workspaceId: id, options });
+        const agentId = `worker-${calls.length}`;
+        records.set(agentId, {
+          id: agentId,
+          provider: "opencode",
+          cwd: workspaces.get(id)!.workspaceDirectory,
+          workspaceId: id,
+          labels: options.labels ?? {},
+        });
+        return { id: agentId };
+      },
+    },
+  }));
+  const createWorkspace = vi.fn(
+    async (_options: Parameters<PaseoApi["workspaces"]["create"]>[0]) => {
+      const id = `item-workspace-${workspaces.size}`;
+      workspaces.set(id, {
+        id,
+        projectId: "project",
+        workspaceDirectory: child,
+        projectRootPath: cwd,
+        archivingAt: null,
+      });
+      return { id };
+    },
+  );
+  const open = vi.fn(async () => {
+    throw new Error("Directory-based workspace reuse is forbidden");
+  });
+  const createAgent = vi.fn();
+  const list = vi.fn(async () => ({
+    entries: [...records.values()].map((agent) => ({ agent })),
+    pageInfo: { nextCursor: null },
+  }));
+  const listModels = vi.fn(async () => ({
+    models: [{ id: "opencode/free-test-model", isDefault: true }],
+  }));
+  const api = {
+    workspaces: { ref, open, create: createWorkspace },
+    agents: {
+      create: createAgent,
+      ref: (id: string) => ({
+        refresh: async () => (records.has(id) ? { agent: records.get(id)! } : null),
+      }),
+      list,
+    },
+    providers: { listModels },
+  } as unknown as PaseoApi;
+  const request: FactoryCreate = {
+    provider: "opencode/opencode/free-test-model",
+    title: "Reviewer · Inventory search",
+    cwd,
+    parentAgentId: "boss",
+    decisionId: "decision-review",
+    labels: { [TEAM_LABEL]: "team-a", [TEAM_ITEM_LABEL]: "item-a" },
+  };
+  return {
+    api,
+    cwd,
+    child,
+    records,
+    workspaces,
+    calls,
+    ref,
+    open,
+    createWorkspace,
+    createAgent,
+    list,
+    listModels,
+    request,
+  };
+}
 
 it("passes provider/model, creation identity and worktree through the public SDK", async () => {
   const calls: PaseoAgentCreateOptions[] = [];
@@ -40,37 +177,163 @@ it("passes provider/model, creation identity and worktree through the public SDK
 });
 
 it("uses only an explicitly advertised provider default when no model was selected", async () => {
-  const calls: PaseoAgentCreateOptions[] = [];
-  const api = {
-    providers: { listModels: async () => ({ models: [{ id: "raw/model-id", isDefault: true }] }) },
-    workspaces: {
-      open: async () => ({
-        agents: {
-          create: async (input: PaseoAgentCreateOptions) => {
-            calls.push(input);
-            return { id: "worker" };
-          },
-        },
-      }),
-    },
-    agents: {
-      create: async (input: PaseoAgentCreateOptions) => {
-        calls.push(input);
-        return { id: "worker" };
-      },
-    },
-  } as unknown as PaseoApi;
-  await sdkController(api).create({
-    provider: "custom-profile",
-    title: "PO",
-    cwd: "/repo",
-    initialPrompt: "Plan",
-    parentAgentId: "boss",
-    decisionId: "decision",
-    labels: {},
-  });
-  expect(calls[0]!.config.provider).toBe("custom-profile/raw/model-id");
+  const fixture = await placementFixture();
+  fixture.listModels.mockResolvedValue({ models: [{ id: "raw/model-id", isDefault: true }] });
+  await sdkController(fixture.api).create({ ...fixture.request, provider: "custom-profile" });
+  expect(fixture.calls[0]!.options.config.provider).toBe("custom-profile/raw/model-id");
+  expect(fixture.calls[0]!.workspaceId).toBe("parent-workspace");
+  expect(fixture.open).not.toHaveBeenCalled();
 });
+
+it("keeps same-directory children in their Chef's verified workspace despite sibling workspaces", async () => {
+  const fixture = await placementFixture();
+  await sdkController(fixture.api).create(fixture.request);
+  expect(fixture.calls[0]!.workspaceId).toBe("parent-workspace");
+  expect(fixture.calls[0]!.options.parent).toBe("boss");
+  expect(fixture.open).not.toHaveBeenCalled();
+  expect(fixture.list).not.toHaveBeenCalled();
+  expect(fixture.createWorkspace).not.toHaveBeenCalled();
+  expect(fixture.createAgent).not.toHaveBeenCalled();
+});
+
+it.each([
+  "archived-parent",
+  "archiving-workspace",
+  "wrong-directory",
+  "other-team",
+  "other-workspace",
+])("rejects %s placement before creating a child", async (problem) => {
+  const fixture = await placementFixture();
+  const request = { ...fixture.request };
+  if (problem === "archived-parent") fixture.records.get("boss")!.archivedAt = "2099-01-01";
+  if (problem === "archiving-workspace")
+    fixture.workspaces.get("parent-workspace")!.archivingAt = "2099-01-01";
+  if (problem === "wrong-directory")
+    fixture.workspaces.get("parent-workspace")!.workspaceDirectory = fixture.child;
+  if (problem === "other-team") request.labels = { ...request.labels, [TEAM_LABEL]: "other-team" };
+  if (problem === "other-workspace") request.workspaceId = "sibling-workspace";
+  await expect(sdkController(fixture.api).create(request)).rejects.toThrow(/Kitchen/);
+  expect(fixture.calls).toEqual([]);
+  expect(fixture.open).not.toHaveBeenCalled();
+  expect(fixture.createWorkspace).not.toHaveBeenCalled();
+});
+
+it("reuses an item's existing checkout mapping while excluding another mission in the same directory", async () => {
+  const fixture = await placementFixture();
+  fixture.workspaces.set("foreign-workspace", {
+    id: "foreign-workspace",
+    projectId: "project",
+    workspaceDirectory: fixture.child,
+    projectRootPath: fixture.cwd,
+    archivingAt: null,
+  });
+  fixture.workspaces.set("developer-workspace", {
+    id: "developer-workspace",
+    projectId: "project",
+    workspaceDirectory: fixture.child,
+    projectRootPath: fixture.cwd,
+    archivingAt: null,
+  });
+  fixture.records.set("foreign", {
+    id: "foreign",
+    provider: "opencode",
+    cwd: fixture.child,
+    workspaceId: "foreign-workspace",
+    labels: { [TEAM_LABEL]: "team-b", [TEAM_ITEM_LABEL]: "item-a" },
+  });
+  fixture.records.set("developer", {
+    id: "developer",
+    provider: "opencode",
+    cwd: fixture.child,
+    workspaceId: "developer-workspace",
+    labels: fixture.request.labels,
+  });
+  await sdkController(fixture.api).create({ ...fixture.request, cwd: fixture.child });
+  expect(fixture.calls[0]!.workspaceId).toBe("developer-workspace");
+  expect(fixture.list).toHaveBeenCalledWith({
+    filter: { labels: fixture.request.labels, includeArchived: false },
+    page: { limit: 200, cursor: undefined },
+  });
+  expect(fixture.createWorkspace).not.toHaveBeenCalled();
+  expect(fixture.open).not.toHaveBeenCalled();
+});
+
+it("creates one named item workspace with a stable identity and reuses it across item roles", async () => {
+  const fixture = await placementFixture();
+  const controller = sdkController(fixture.api);
+  await controller.create({ ...fixture.request, cwd: fixture.child });
+  const firstWorkspace = fixture.calls[0]!.workspaceId;
+  expect(fixture.createWorkspace).toHaveBeenCalledExactlyOnceWith({
+    idempotencyKey: expect.stringMatching(/^kitchen-item:[a-f0-9]{64}$/),
+    title: "Inventory search",
+    source: { kind: "directory", path: fixture.child, projectId: "project" },
+  });
+  await controller.create({
+    ...fixture.request,
+    cwd: fixture.child,
+    title: "Verifier · Inventory search",
+    decisionId: "decision-verify",
+  });
+  expect(fixture.calls[1]!.workspaceId).toBe(firstWorkspace);
+  expect(fixture.createWorkspace).toHaveBeenCalledTimes(1);
+  fixture.records.delete("worker-1");
+  fixture.records.delete("worker-2");
+  await controller.create({ ...fixture.request, cwd: fixture.child });
+  const firstKey = fixture.createWorkspace.mock.calls[0]![0].idempotencyKey;
+  expect(fixture.createWorkspace.mock.calls[1]![0].idempotencyKey).toBe(firstKey);
+  fixture.records.get("boss")!.labels = { [TEAM_LABEL]: "team-b" };
+  await controller.create({
+    ...fixture.request,
+    cwd: fixture.child,
+    labels: { [TEAM_LABEL]: "team-b", [TEAM_ITEM_LABEL]: "item-a" },
+  });
+  expect(fixture.calls[3]!.workspaceId).not.toBe(fixture.calls[2]!.workspaceId);
+  expect(fixture.createWorkspace.mock.calls[2]![0].idempotencyKey).not.toBe(firstKey);
+  expect(fixture.open).not.toHaveBeenCalled();
+});
+
+it("rejects a different checkout without team and item ownership", async () => {
+  const fixture = await placementFixture();
+  await expect(
+    sdkController(fixture.api).create({
+      ...fixture.request,
+      cwd: fixture.child,
+      labels: { [TEAM_LABEL]: "team-a" },
+    }),
+  ).rejects.toThrow("team and work item identity");
+  expect(fixture.calls).toEqual([]);
+  expect(fixture.list).not.toHaveBeenCalled();
+});
+
+it.each([
+  { routingMode: undefined, expected: "manual" },
+  { routingMode: "manual" as const, expected: "manual" },
+  { routingMode: "auto" as const, expected: "auto" },
+])(
+  "binds Cook routing as $expected while preserving the selected provider/model",
+  async ({ routingMode, expected }) => {
+    const create = vi.fn(async () => ({ id: "worker" }));
+    const listModels = vi.fn();
+    await sdkController({
+      agents: { create },
+      providers: { listModels },
+    } as unknown as PaseoApi).create({
+      provider: "opencode/opencode/free-test-model",
+      title: "Developer",
+      cwd: "/repo",
+      decisionId: "decision",
+      routingMode,
+      labels: {},
+    });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: { provider: "opencode/opencode/free-test-model" },
+        labels: { "pandaos.routing.mode": expected },
+      }),
+    );
+    expect(listModels).not.toHaveBeenCalled();
+  },
+);
 
 it("leaves explicit permission settings intact when Kitchen auto-accept is disabled", async () => {
   const config: PaseoAgentConfig = {
@@ -117,7 +380,7 @@ it("starts an OpenCode Cook in Build with the advertised auto-accept toggle", as
     expect.objectContaining({
       idempotencyKey: "decision",
       prompt: "Do the work",
-      labels: { role: "developer" },
+      labels: { role: "developer", "pandaos.routing.mode": "manual" },
       config: {
         provider: "opencode/opencode/free-test-model",
         modeId: "build",

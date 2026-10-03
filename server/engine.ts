@@ -675,6 +675,24 @@ function validateReportBinding(
   }
 }
 
+function validateResearchWait(
+  pack: WorkflowPack,
+  payload: TeamReportPayload,
+  children: WorkItem[],
+): void {
+  if (
+    pack.requireVerification &&
+    payload.needs &&
+    ["research", "split"].includes(payload.needs.kind) &&
+    !children.some(
+      (child) => typeof child.pack.workRequest === "string" && child.phase !== pack.dependencyPhase,
+    )
+  )
+    throw new ReportRejectedError(
+      "Research or split needs an unfinished registered work request. Include a bounded workRequests entry, or continue investigating in the current role before reporting. Do not claim a child that does not exist or request human input for routine research.",
+    );
+}
+
 export function applyReport(
   state: TeamState,
   pack: WorkflowPack,
@@ -691,6 +709,8 @@ export function applyReport(
       `Unknown outcome "${payload.outcome}". Allowed: ${Object.keys(phase.outcomes ?? {}).join(", ")}`,
     );
   }
+  const children = Object.values(state.items).filter((child) => child.parentId === item.id);
+  validateResearchWait(pack, payload, children);
   validateFinalReport(pack, binding, item, payload);
   const actor: Actor = { type: "role", id: binding.role };
   mergeReportEvidence(item, payload);
@@ -715,7 +735,6 @@ export function applyReport(
     blockForBoss(state, pack, item, payload.needs.text, events);
     return item;
   }
-  const children = Object.values(state.items).filter((child) => child.parentId === item.id);
   if (
     pack.requireVerification &&
     item.board === "item" &&
