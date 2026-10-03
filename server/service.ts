@@ -247,7 +247,8 @@ export class TeamService {
   private async questionTeams(agentId: string): Promise<TeamState[]> {
     const bossTeams = await this.listForBoss(agentId);
     const caller = await this.resolveCaller(agentId);
-    const workerTeam = caller ? await this.store.get(caller.teamId) : null;
+    const workerTeam =
+      caller?.binding.status === "active" ? await this.store.get(caller.teamId) : null;
     return [
       ...new Map(
         [...bossTeams, ...(workerTeam ? [workerTeam] : [])].map((state) => [state.team.id, state]),
@@ -291,7 +292,8 @@ export class TeamService {
             question.responseStartedAt ||
             !question.continueAt ||
             Date.parse(occurredAt) < Date.parse(question.askedAt) ||
-            (requestId && question.providerRequestId !== requestId) ||
+            (requestId &&
+              (question.providerRequestId !== requestId || question.agentId !== agentId)) ||
             (agentId &&
               agentId !== draft.team.bossAgentId &&
               question.agentId !== agentId &&
@@ -303,7 +305,7 @@ export class TeamService {
           question.responseStartedAt = occurredAt;
           if (question.providerRequestId) {
             (item.pack.providerHumanQuestions as Record<string, unknown>)[
-              question.providerRequestId
+              `${question.agentId}:${question.providerRequestId}`
             ] = question;
           } else item.pack.nativeHumanQuestion = question;
           events.push({
@@ -336,11 +338,12 @@ export class TeamService {
             ),
           ) ?? draft.items[draft.team.rootItemId];
         const questions = (item.pack.providerHumanQuestions ??= {}) as Record<string, unknown>;
-        const existing = readHumanQuestion(questions[request.id]);
+        const key = `${agentId}:${request.id}`;
+        const existing = readHumanQuestion(questions[key]);
         if (existing) {
           if (request.responseStartedAt) {
             existing.responseStartedAt = request.responseStartedAt;
-            questions[request.id] = existing;
+            questions[key] = existing;
           }
           return { events: [], result: null };
         }
@@ -350,7 +353,7 @@ export class TeamService {
           providerRequestId: request.id,
           ...(request.responseStartedAt ? { responseStartedAt: request.responseStartedAt } : {}),
         };
-        questions[request.id] = question;
+        questions[key] = question;
         return {
           events: [
             {
@@ -372,8 +375,7 @@ export class TeamService {
       await this.store.commit(state.team.id, (draft) => {
         for (const item of Object.values(draft.items)) {
           const questions = item.pack.providerHumanQuestions as Record<string, unknown> | undefined;
-          if (questions && readHumanQuestion(questions[requestId])?.agentId === agentId)
-            delete questions[requestId];
+          if (questions) delete questions[`${agentId}:${requestId}`];
         }
         return { events: [], result: null };
       });

@@ -318,7 +318,7 @@ describe("TeamService", () => {
     );
     const questions = (await service.status(team.team.id)).state.items[team.team.rootItemId].pack
       .providerHumanQuestions as Record<string, unknown>;
-    expect(Object.keys(questions).sort()).toEqual(["access", "started"]);
+    expect(Object.keys(questions).sort()).toEqual(["boss:access", "boss:started"]);
     await service.dispatchAll();
     expect(resumeProviderQuestion).toHaveBeenCalledTimes(1);
     await service.shutdown();
@@ -374,6 +374,42 @@ describe("TeamService", () => {
     );
     expect(attempts).toHaveLength(2);
     expect(attempts[0].slice(2)).toEqual(attempts[1].slice(2));
+    await service.shutdown();
+  });
+  it("keeps equal provider request IDs isolated to their actual active agents", async () => {
+    const host = fakeHost(root);
+    let now = new Date("2099-10-03T10:00:00Z");
+    const resumeProviderQuestion = vi.fn(async () => true);
+    const service = new TeamService({
+      ...(host.options as unknown as TeamServiceOptions),
+      storageRoot: root,
+      inputActivitySupported: true,
+      now: () => now,
+      resumeProviderQuestion,
+    });
+    await service.start();
+    const team = await service.startTeam({
+      bossAgentId: "boss",
+      title: "Isolated questions",
+      objective: "Keep agent identities",
+    });
+    await service.dispatchAll();
+    const worker = host.agentFor("po");
+    await service.trackProviderQuestion("boss", { id: "same", text: "Save or Apply?" });
+    await service.trackProviderQuestion(worker.id, { id: "same", text: "Blue or purple?" });
+    await service.noteInputActivity(worker.id, "same");
+    now = new Date(now.getTime() + 60000);
+    await service.dispatchAll();
+    expect(resumeProviderQuestion).toHaveBeenCalledExactlyOnceWith(
+      "boss",
+      "same",
+      expect.any(String),
+    );
+    await service.store.commit(team.team.id, (draft) => {
+      for (const binding of Object.values(draft.bindings)) binding.status = "revoked";
+      return { events: [], result: null };
+    });
+    expect(await service.isManagedAgent(worker.id)).toBe(false);
     await service.shutdown();
   });
   let root: string;
