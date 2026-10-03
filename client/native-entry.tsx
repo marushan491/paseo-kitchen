@@ -21,6 +21,7 @@ import { missionSummary } from "../shared/mission-stage.js";
 import { Action, useFactoryStyles } from "./ui.js";
 import { useMissionAgents } from "./mission-agents.js";
 import { openFactorySurface } from "./registration.js";
+import { startNativeWithReceiptRetry } from "./native-start.js";
 
 interface NativeContribution {
   id: string;
@@ -51,7 +52,8 @@ export function registerNativeExecution(client: PluginClientContext) {
       icon: "ChefHat",
       placeholder: "Message Kitchen…",
       loadPresets: (input) => client.rpc(factoryNativePresets, input),
-      start: (input) => client.rpc(factoryNativeStart, input),
+      start: (input) =>
+        startNativeWithReceiptRetry((request) => client.rpc(factoryNativeStart, request), input),
       onManage: () => openFactorySurface(client, { section: "Team" }),
     });
   }
