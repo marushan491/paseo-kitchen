@@ -1414,6 +1414,7 @@ describe("Kitchen runtime", () => {
     const followup = {
       agentId: "boss",
       eventId: "followup-1",
+      origin: { kind: "client" as const },
       text: "Also preserve existing data",
       context: { attachments: [{ name: "spec.txt" }] },
     };
@@ -1542,6 +1543,25 @@ describe("Kitchen runtime", () => {
     const activeMs = Object.values(beforeSteer.bindings)[0]!.activeMs;
     clock = new Date(clock.getTime() + 1_000);
     send.mockClear();
+    const objectiveBeforeNotification = beforeSteer.team.objective;
+    await reloaded.acceptUserMessage({
+      agentId: "boss",
+      eventId: "plugin-notification",
+      text: "Team finished",
+      origin: { kind: "plugin" },
+    });
+    await reloaded.acceptUserMessage({
+      agentId: "boss",
+      eventId: "unknown-notification",
+      text: "Task done",
+    });
+    await reloaded.dispatchAll();
+    const afterNotification = (await reloaded.status(started.team.id)).state;
+    expect(afterNotification.team.objective).toBe(objectiveBeforeNotification);
+    expect(
+      afterNotification.items[started.team.rootItemId].pack.nativeContextMessageId,
+    ).toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
     await reloaded.acceptUserMessage({
       agentId: "boss",
       eventId: "native-image-followup",
@@ -1554,8 +1574,33 @@ describe("Kitchen runtime", () => {
       host.agentFor("po").id,
       expect.stringContaining("Use the attached revised design"),
       "steer",
-      { nativeBrief: { agentId: "boss", messageId: "native-image-followup", requireRich: true } },
+      {
+        nativeInitialBrief: { agentId: "boss", messageId: "native:deferred", requireRich: true },
+        nativeBrief: { agentId: "boss", messageId: "native-image-followup", requireRich: true },
+      },
     );
+    send.mockClear();
+    await reloaded.acceptUserMessage({
+      agentId: "boss",
+      eventId: "native-text-followup",
+      text: "Keep both visual requirements",
+      origin: { kind: "client" },
+    });
+    await reloaded.dispatchAll();
+    expect(send).toHaveBeenCalledWith(host.agentFor("po").id, expect.any(String), "steer", {
+      nativeInitialBrief: { agentId: "boss", messageId: "native:deferred", requireRich: true },
+      nativeBrief: { agentId: "boss", messageId: "native-text-followup", requireRich: false },
+    });
+    await reloaded.acceptUserMessage({
+      agentId: "boss",
+      eventId: "plugin-after-followup",
+      text: "Internal notification",
+      origin: { kind: "plugin" },
+    });
+    expect(
+      (await reloaded.status(started.team.id)).state.items[started.team.rootItemId].pack
+        .nativeContextMessageId,
+    ).toBe("native-text-followup");
     expect(host.created).toHaveLength(1);
     expect(
       Object.values((await reloaded.status(started.team.id)).state.bindings)[0]!.activeMs,

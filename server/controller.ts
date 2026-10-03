@@ -44,6 +44,7 @@ export interface FactoryCreate {
   worktree?: { worktreeName: string; branchName: string; baseBranch: string };
 }
 export interface FactorySendContext {
+  nativeInitialBrief?: { agentId: string; messageId: string; requireRich?: boolean };
   nativeBrief: { agentId: string; messageId: string; requireRich?: boolean };
 }
 export interface FactoryController {
@@ -202,19 +203,22 @@ export function sdkController(
       return { id: created.id };
     },
     async send(id, text, behavior, context) {
-      const brief = context ? await nativeMessage(paseo, context.nativeBrief) : undefined;
-      const blocks = typeof brief === "string" ? [{ type: "text" as const, text: brief }] : brief;
-      const images = blocks
-        ?.filter((block) => block.type === "image")
-        .map(({ data, mimeType }) => ({ data, mimeType }));
-      const originalText = blocks
-        ?.filter((block) => block.type === "text")
-        .map((block) => block.text)
+      const blocks = context ? await nativeContext(paseo, context) : [];
+      const images = [
+        ...new Map(
+          blocks
+            .filter((block) => block.type === "image")
+            .map(({ data, mimeType }) => [`${mimeType}:${data}`, { data, mimeType }]),
+        ).values(),
+      ];
+      const originalText = [
+        ...new Set(blocks.filter((block) => block.type === "text").map((block) => block.text)),
+      ]
+        .filter((value) => !text.includes(value))
         .join("\n");
-      const packet =
-        originalText && !text.includes(originalText)
-          ? `${text}\n\n## Original native brief\n${originalText}`
-          : text;
+      const packet = originalText
+        ? `${text}\n\n## Native conversation context\n${originalText}`
+        : text;
       await paseo.agents
         .ref(id)
         .send(packet, { activeTurnBehavior: behavior, ...(images?.length ? { images } : {}) });
@@ -231,6 +235,19 @@ const NativePromptSchema = z.union([
     ]),
   ),
 ]);
+async function nativeContext(paseo: PaseoApi, context: FactorySendContext) {
+  const references = [context.nativeInitialBrief, context.nativeBrief].filter(
+    (value): value is FactorySendContext["nativeBrief"] => Boolean(value),
+  );
+  const unique = [
+    ...new Map(references.map((value) => [`${value.agentId}:${value.messageId}`, value])).values(),
+  ];
+  const prompts = await Promise.all(unique.map((reference) => nativeMessage(paseo, reference)));
+  return prompts.flatMap((prompt) =>
+    typeof prompt === "string" ? [{ type: "text" as const, text: prompt }] : prompt,
+  );
+}
+
 async function nativeMessage(
   paseo: PaseoApi,
   reference: FactorySendContext["nativeBrief"],
@@ -249,7 +266,7 @@ async function nativeMessage(
       const item = entry.item;
       if (
         item.type !== "user_message" ||
-        (item.clientMessageId !== reference.messageId && item.messageId !== reference.messageId)
+        (item.clientMessageId ?? item.messageId) !== reference.messageId
       )
         continue;
       return parseNativePrompt(item, reference.requireRich);

@@ -422,11 +422,107 @@ it("fails closed when a selected rich brief was not persisted or its history is 
       nativeBrief: { agentId: "boss", messageId: "native:brief", requireRich: true },
     }),
   ).rejects.toThrow(/preserve.*images/);
+  refetch.mockResolvedValueOnce({
+    entries: [
+      { item: { type: "user_message", clientMessageId: "native:brief", text: "[image]" } },
+      {
+        item: {
+          type: "user_message",
+          clientMessageId: "latest",
+          text: "Latest user context",
+          prompt: "Latest user context",
+        },
+      },
+    ],
+    hasOlder: false,
+  });
+  await expect(
+    controller.send("verifier", "Verify", undefined, {
+      nativeInitialBrief: { agentId: "boss", messageId: "native:brief", requireRich: true },
+      nativeBrief: { agentId: "boss", messageId: "latest" },
+    }),
+  ).rejects.toThrow(/preserve.*images/);
   refetch.mockResolvedValueOnce({ entries: [], hasOlder: false, gap: true });
   await expect(
     controller.send("po", "Plan", undefined, {
       nativeBrief: { agentId: "boss", messageId: "native:brief" },
     }),
   ).rejects.toThrow(/incomplete/);
+  expect(send).not.toHaveBeenCalled();
+});
+
+it("retains the initial native PNG alongside actual follow-ups and deduplicates rich blocks", async () => {
+  const initialImage = { type: "image" as const, data: "initial-png", mimeType: "image/png" };
+  const prompts: Record<string, unknown> = {
+    initial: [{ type: "text", text: "Original attached task" }, initialImage],
+    revised: [
+      { type: "text", text: "Revised attached task" },
+      initialImage,
+      { type: "image", data: "revised-png", mimeType: "image/png" },
+    ],
+    textual: "Preserve original layout",
+  };
+  const refetch = vi.fn(async () => ({
+    entries: Object.entries(prompts).map(([id, prompt]) => ({
+      item: {
+        type: "user_message",
+        clientMessageId: id,
+        text: "Rendered text",
+        prompt,
+      },
+    })),
+    hasOlder: false,
+  }));
+  const send = vi.fn();
+  const api = {
+    agents: { ref: (id: string) => (id === "boss" ? { timeline: { refetch } } : { send }) },
+  } as unknown as PaseoApi;
+  const controller = sdkController(api);
+  await controller.send("reviewer", "Original attached task already in packet", undefined, {
+    nativeInitialBrief: { agentId: "boss", messageId: "initial", requireRich: true },
+    nativeBrief: { agentId: "boss", messageId: "revised", requireRich: true },
+  });
+  expect(send).toHaveBeenLastCalledWith(expect.stringContaining("Revised attached task"), {
+    activeTurnBehavior: undefined,
+    images: [
+      { data: "initial-png", mimeType: "image/png" },
+      { data: "revised-png", mimeType: "image/png" },
+    ],
+  });
+  expect(send.mock.calls[0]![0].split("Original attached task")).toHaveLength(2);
+  await controller.send("verifier", "Verify actual candidate", undefined, {
+    nativeInitialBrief: { agentId: "boss", messageId: "initial", requireRich: true },
+    nativeBrief: { agentId: "boss", messageId: "textual" },
+  });
+  expect(send).toHaveBeenLastCalledWith(expect.stringContaining("Preserve original layout"), {
+    activeTurnBehavior: undefined,
+    images: [{ data: "initial-png", mimeType: "image/png" }],
+  });
+});
+
+it("does not replace an explicit native client message identity with a conflicting provider ID", async () => {
+  const refetch = vi.fn(async () => ({
+    entries: [
+      {
+        item: {
+          type: "user_message",
+          clientMessageId: "different-client",
+          messageId: "selected-client",
+          text: "Wrong brief",
+          prompt: [{ type: "image", data: "wrong-pixels", mimeType: "image/png" }],
+        },
+      },
+    ],
+    hasOlder: false,
+  }));
+  const send = vi.fn();
+  const api = {
+    agents: { ref: (id: string) => (id === "boss" ? { timeline: { refetch } } : { send }) },
+  } as unknown as PaseoApi;
+  await expect(
+    sdkController(api).send("verifier", "Verify", undefined, {
+      nativeBrief: { agentId: "boss", messageId: "selected-client", requireRich: true },
+    }),
+  ).rejects.toThrow(/not found/);
   expect(send).not.toHaveBeenCalled();
 });

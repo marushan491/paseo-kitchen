@@ -1492,7 +1492,12 @@ export class TeamService {
     draft: TeamState,
     text: string,
     actor: Actor,
-    options: { alreadyDelivered?: boolean; eventId?: string; context?: Record<string, unknown> },
+    options: {
+      alreadyDelivered?: boolean;
+      clientConversation?: boolean;
+      eventId?: string;
+      context?: Record<string, unknown>;
+    },
   ): boolean {
     if (!options.eventId) return true;
     const root = draft.items[draft.team.rootItemId];
@@ -1506,7 +1511,7 @@ export class TeamService {
       return false;
     }
     receipts[options.eventId] = fingerprint;
-    if (options.alreadyDelivered) {
+    if (options.alreadyDelivered && options.clientConversation) {
       const message = `\n\n## Additional user context\n${text}${options.context ? `\nReferences: ${JSON.stringify(options.context)}` : ""}`;
       draft.team.objective += message;
       root.objective += message;
@@ -1551,6 +1556,7 @@ export class TeamService {
             : undefined,
         },
       ];
+      if (options.alreadyDelivered && !options.clientConversation) return { events, result: null };
       const nativeQuestions = Object.values(draft.items).filter((item) => {
         const question = item.pack.nativeHumanQuestion as
           | { revision?: number; category?: string }
@@ -2862,6 +2868,15 @@ export class TeamService {
     if (typeof id !== "string") return undefined;
     const initial = id === root.pack.nativeInitialMessageId;
     return {
+      ...(typeof root.pack.nativeInitialMessageId === "string" && !initial
+        ? {
+            nativeInitialBrief: {
+              agentId: state.team.bossAgentId,
+              messageId: root.pack.nativeInitialMessageId,
+              requireRich: state.team.kitchen.initialBriefHasImages,
+            },
+          }
+        : {}),
       nativeBrief: {
         agentId: state.team.bossAgentId,
         messageId: id,
