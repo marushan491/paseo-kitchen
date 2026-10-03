@@ -115,14 +115,23 @@ function StudioContent(props: StudioProps) {
   );
   const { section, project, selectedTeam, selectedAgent, selectedStation } = view;
   useEffect(() => {
-    if (view.routeTeamId === routeTeamId && view.routeSection === routeSection) return;
-    const patch: Partial<StudioView> = { routeTeamId, routeSection };
-    if (routeTeamId) {
-      patch.selectedTeam = routeTeamId;
-      patch.section = "Missions";
-    } else if (sections.includes(routeSection as Section)) patch.section = routeSection as Section;
-    updateView(patch);
-  }, [routeTeamId, routeSection, view.routeTeamId, view.routeSection, updateView]);
+    cache.setQueryData<StudioView>(viewKey, (previous) => {
+      if (
+        !previous ||
+        (previous.routeTeamId === routeTeamId && previous.routeSection === routeSection)
+      ) {
+        return previous;
+      }
+      const patch: Partial<StudioView> = { routeTeamId, routeSection };
+      if (routeTeamId) {
+        patch.selectedTeam = routeTeamId;
+        patch.section = "Missions";
+      } else if (sections.includes(routeSection as Section)) {
+        patch.section = routeSection as Section;
+      }
+      return { ...previous, ...patch };
+    });
+  }, [routeTeamId, routeSection, cache, viewKey]);
   const setSelectedAgent = useCallback(
     (value: string) => updateView({ selectedAgent: value }),
     [updateView],
