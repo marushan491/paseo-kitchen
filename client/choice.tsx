@@ -66,19 +66,16 @@ export function Choice(
         buttonRef={trigger}
       />
       {expanded ? (
-        <SurfaceSheet
-          {...props}
-          title={`Choose ${props.label.toLocaleLowerCase()}`}
-          onClose={close}
-          narrow
-        >
-          <Field
-            theme={props.theme}
-            label={`Search ${props.label.toLocaleLowerCase()}`}
-            value={search}
-            onChange={setSearch}
-            autoFocus
-          />
+        <SurfaceSheet {...props} title={props.label} onClose={close} narrow>
+          {props.options.length > 6 ? (
+            <Field
+              theme={props.theme}
+              label={`Search ${props.label.toLocaleLowerCase()}`}
+              value={search}
+              onChange={setSearch}
+              autoFocus
+            />
+          ) : null}
           {props.allowEmpty ? (
             <Action
               theme={props.theme}

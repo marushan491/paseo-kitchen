@@ -194,11 +194,13 @@ function StudioContent(props: StudioProps) {
     [openTeam, updateView],
   );
   return (
-    <View style={styles.screen}>
+    <View testID="kitchen-studio" style={styles.screen}>
       <View style={styles.content}>
         <View style={styles.header}>
           <View style={styles.stack}>
-            <Text style={styles.title}>Kitchen Studio</Text>
+            <Text accessibilityRole="header" style={styles.title}>
+              Kitchen Studio
+            </Text>
             <Text style={styles.muted}>Turn a goal into verified work.</Text>
           </View>
           <View style={styles.controls}>
@@ -229,6 +231,8 @@ function StudioContent(props: StudioProps) {
           </View>
         </View>
         <ScrollView
+          accessibilityRole="tablist"
+          accessibilityLabel="Kitchen Studio sections"
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.navigation}

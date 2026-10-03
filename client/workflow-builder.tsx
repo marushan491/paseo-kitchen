@@ -1,11 +1,12 @@
 import { type PluginSurfaceProps, usePaseo, useRpc } from "@getpaseo/plugin/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Text, View } from "react-native";
 import {
   factoryWorkflowApply,
   factoryWorkflowPreview,
   factoryWorkflowSave,
+  factoryWorkflowValidate,
   factoryWorkflowsList,
   type WorkflowDefinition,
   type WorkflowPreview,
@@ -13,7 +14,10 @@ import {
 import { factoryPacks, type RoleProfileOverride } from "../shared/factory-contracts.js";
 import type { RoleWorkflow } from "../shared/role-builder.js";
 import { Choice } from "./choice.js";
+import { NewWorkflowNode } from "./workflow-node-editor.js";
 import { RoleGraph } from "./role-graph.js";
+import { SkillPicker } from "./skill-picker.js";
+import { WorkflowSourceEditor } from "./workflow-source-editor.js";
 import { RuntimeProfile } from "./runtime-profile.js";
 import { Action, Disclosure, Field, SurfaceSheet, useFactoryStyles } from "./ui.js";
 
@@ -77,6 +81,7 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
   const list = useRpc(factoryWorkflowsList);
   const readPacks = useRpc(factoryPacks);
   const save = useRpc(factoryWorkflowSave);
+  const validate = useRpc(factoryWorkflowValidate);
   const design = useRpc(factoryWorkflowPreview);
   const apply = useRpc(factoryWorkflowApply);
   const library = useQuery({ queryKey: ["factory", "workflows"], queryFn: () => list({}) });
@@ -89,6 +94,7 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
   const [draft, setDraft] = useState<WorkflowDefinition | null>(null);
   const [request, setRequest] = useState("");
   const [cwd, setCwd] = useState(props.projectPath || "");
+  const projectCwd = props.projectPath || cwd;
   const [role, setRole] = useState("");
   const [preview, setPreview] = useState<WorkflowPreview | null>(null);
   const [addRole, setAddRole] = useState(false);
@@ -96,6 +102,8 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
   const templates = library.data?.templates;
   const saved = findDefinition(definitions, templates, selected);
   const definition = draft || saved;
+  const context = useRef({ selected, definition });
+  context.current = { selected, definition };
   const workflow = useMemo(
     () =>
       definition
@@ -159,7 +167,7 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
       return design({
         id: candidate.id,
         basePackId: saved.basePackId,
-        cwd: props.projectPath || cwd,
+        cwd: projectCwd,
         request: input.request,
         expectedRevision: candidate.revision,
         role: input.role,
@@ -177,6 +185,21 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
     if (draft) saving.mutate(draft);
   }, [draft, saving]);
   const discard = useCallback(() => setDraft(null), []);
+  const applySource = useCallback(
+    async (value: WorkflowDefinition) => {
+      const initial = context.current;
+      const checked = await validate({ definition: variantOf(value) });
+      if (
+        context.current.selected !== initial.selected ||
+        context.current.definition !== initial.definition
+      )
+        throw new Error(
+          "The team changed while validating. Review the current draft and try again.",
+        );
+      setDraft(checked);
+    },
+    [validate],
+  );
   const graphChanged = useCallback(
     (changed: RoleWorkflow) => {
       if (!definition) return;
@@ -203,13 +226,6 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
     if (preview) applying.mutate(preview);
   }, [preview, applying]);
   const openAdd = useCallback(() => setAddRole(true), []);
-  const askNewRole = useCallback(
-    (text: string) => {
-      setAddRole(false);
-      designing.mutate({ request: `Add a role for this responsibility: ${text}` });
-    },
-    [designing],
-  );
   const error = mutationError(
     library.error,
     packs.error,
@@ -239,7 +255,7 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
             title="+ Add role"
             value="add"
             onAction={openAdd}
-            disabled={!definition || Boolean(draft)}
+            disabled={!definition || saving.isPending}
             variant="secondary"
           />
           <Action
@@ -265,24 +281,36 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
         </View>
       ) : null}
       {workflow ? (
-        <RoleGraph {...props} workflow={workflow} onRole={setRole} onChange={graphChanged} />
+        <RoleGraph
+          key={selected}
+          {...props}
+          workflow={workflow}
+          onRole={setRole}
+          onChange={graphChanged}
+        />
       ) : null}
-      <AskKitchen
+      <Disclosure
+        theme={props.theme}
+        title="Describe a change to Kitchen"
+        summary="Ask for a new role or handoff; review the proposed changes before applying."
+      >
+        <AskKitchen
+          {...props}
+          request={request}
+          onRequest={setRequest}
+          cwd={cwd}
+          onCwd={setCwd}
+          projectOptions={projectOptions}
+          pending={designing.isPending}
+          ready={previewReady(request, definition, draft, projectCwd, designing.isPending)}
+          onAsk={ask}
+        />
+      </Disclosure>
+      <WorkflowSourceSection
         {...props}
-        request={request}
-        onRequest={setRequest}
-        cwd={cwd}
-        onCwd={setCwd}
-        projectOptions={projectOptions}
-        pending={designing.isPending}
-        ready={previewReady(
-          request,
-          definition,
-          draft,
-          props.projectPath || cwd,
-          designing.isPending,
-        )}
-        onAsk={ask}
+        workflowId={selected}
+        definition={definition}
+        onApply={applySource}
       />
       {definition ? (
         <Disclosure
@@ -297,7 +325,12 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
             onChange={updateName}
           />
           <AutonomyRules {...props} definition={definition} onChange={setDraft} />
-          <HeadChefPreferences {...props} definition={definition} onChange={setDraft} />
+          <HeadChefPreferences
+            {...props}
+            cwd={projectCwd}
+            definition={definition}
+            onChange={setDraft}
+          />
           <Text style={styles.text}>
             Independent verification and your final acceptance are required.
           </Text>
@@ -313,7 +346,7 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
           {...props}
           definition={definition}
           role={role}
-          cwd={props.projectPath || cwd}
+          cwd={projectCwd}
           pending={saving.isPending || designing.isPending}
           error={error}
           onSave={persistRole}
@@ -321,11 +354,11 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
           onClose={closeRole}
         />
       ) : null}
-      {addRole ? (
-        <NewRoleRequest
+      {addRole && definition ? (
+        <NewWorkflowNode
           {...props}
-          pending={designing.isPending}
-          onDesign={askNewRole}
+          definition={definition}
+          onApply={applySource}
           onClose={closeAdd}
         />
       ) : null}
@@ -340,6 +373,30 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
         />
       ) : null}
     </View>
+  );
+}
+
+function WorkflowSourceSection(
+  props: PluginSurfaceProps & {
+    definition?: WorkflowDefinition;
+    workflowId: string;
+    onApply(value: WorkflowDefinition): Promise<void>;
+  },
+) {
+  if (!props.definition) return null;
+  return (
+    <Disclosure
+      theme={props.theme}
+      title="Workflow JSON"
+      summary="Edit, validate or copy the workflow configuration."
+    >
+      <WorkflowSourceEditor
+        key={props.workflowId}
+        {...props}
+        definition={props.definition}
+        onApply={props.onApply}
+      />
+    </Disclosure>
   );
 }
 
@@ -476,7 +533,16 @@ function WorkflowRoleEditor(
       >
         <RuntimeProfile {...props} cwd={cwd} onCwd={setCwd} value={profile} onChange={setProfile} />
       </Disclosure>
-      <SkillChips {...props} value={skills} onChange={setSkills} />
+      <SkillPicker
+        {...props}
+        value={skills}
+        onChange={setSkills}
+        cwd={cwd}
+        provider={profile.provider}
+        role={role}
+        title={name}
+        instructions={instructions}
+      />
       <Text style={styles.heading}>Communication</Text>
       <Choice
         {...props}
@@ -524,34 +590,6 @@ const investigationOptions = [
   { id: "human", title: "Ask me" },
 ];
 
-function NewRoleRequest(
-  props: PluginSurfaceProps & { pending: boolean; onDesign(text: string): void; onClose(): void },
-) {
-  const [text, setText] = useState("");
-  const { onDesign } = props;
-  const design = useCallback(() => onDesign(text), [onDesign, text]);
-  return (
-    <SurfaceSheet {...props} title="Create agent role" onClose={props.onClose}>
-      <Field
-        theme={props.theme}
-        label="What should this agent be responsible for?"
-        value={text}
-        onChange={setText}
-        multiline
-        autoFocus
-        placeholder="Check database migrations for backwards compatibility and data-loss risks."
-      />
-      <Action
-        theme={props.theme}
-        title={props.pending ? "Designing…" : "Design this role"}
-        value="design"
-        onAction={design}
-        disabled={!text.trim() || props.pending}
-        variant="primary"
-      />
-    </SurfaceSheet>
-  );
-}
 function WorkflowPreviewSheet(
   props: PluginSurfaceProps & {
     preview: WorkflowPreview;
@@ -602,88 +640,14 @@ function WorkflowPreviewSheet(
   );
 }
 
-function SkillChips(
-  props: PluginSurfaceProps & { value: string[]; onChange(value: string[]): void },
-) {
-  const styles = useFactoryStyles(props);
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
-  const { value, onChange } = props;
-  const open = useCallback(() => setAdding(true), []);
-  const cancel = useCallback(() => {
-    setAdding(false);
-    setName("");
-  }, []);
-  const add = useCallback(() => {
-    const skill = name.trim();
-    if (skill && !value.includes(skill)) onChange([...value, skill]);
-    setAdding(false);
-    setName("");
-  }, [name, value, onChange]);
-  const remove = useCallback(
-    (skill: string) => onChange(value.filter((entry) => entry !== skill)),
-    [value, onChange],
-  );
-  return (
-    <View style={styles.stack}>
-      <Text style={styles.heading}>Skills</Text>
-      <View style={styles.row}>
-        {value.map((skill) => (
-          <Action
-            key={skill}
-            theme={props.theme}
-            title={`${skill} ×`}
-            accessibilityLabel={`Remove skill ${skill}`}
-            value={skill}
-            onAction={remove}
-            variant="secondary"
-          />
-        ))}
-        <Action
-          theme={props.theme}
-          title="+ Add skill"
-          value="add"
-          onAction={open}
-          variant="secondary"
-        />
-      </View>
-      {adding ? (
-        <View style={styles.card}>
-          <Field
-            theme={props.theme}
-            label="Installed skill name"
-            value={name}
-            onChange={setName}
-            placeholder="design-taste-frontend"
-            autoFocus
-          />
-          <View style={styles.footerActions}>
-            <Action theme={props.theme} title="Cancel" value="cancel" onAction={cancel} />
-            <Action
-              theme={props.theme}
-              title="Add skill"
-              value="add"
-              onAction={add}
-              disabled={!name.trim()}
-              variant="primary"
-            />
-          </View>
-        </View>
-      ) : null}
-      <Text style={styles.muted}>
-        These names are sent to the agent harness. The agent reports missing skills instead of
-        pretending to use them.
-      </Text>
-    </View>
-  );
-}
 function HeadChefPreferences(
   props: PluginSurfaceProps & {
+    cwd: string;
     definition: WorkflowDefinition;
     onChange(value: WorkflowDefinition): void;
   },
 ) {
-  const [cwd, setCwd] = useState("");
+  const [cwd, setCwd] = useState(props.cwd);
   const { definition, onChange } = props;
   const profile = definition.headChefProfile || emptyProfile;
   const update = useCallback(
@@ -717,7 +681,15 @@ function HeadChefPreferences(
         multiline
         placeholder="How should Head Chef coordinate this team?"
       />
-      <SkillChips {...props} value={profile.skills || emptySkills} onChange={skills} />
+      <SkillPicker
+        {...props}
+        value={profile.skills || emptySkills}
+        onChange={skills}
+        cwd={cwd}
+        provider={profile.provider}
+        role="head-chef"
+        instructions={profile.instructions}
+      />
     </Disclosure>
   );
 }

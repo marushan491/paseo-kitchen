@@ -1,6 +1,7 @@
 import type { PluginHostProps } from "@getpaseo/plugin/client";
 import { useCallback, useMemo, useId, useState } from "react";
 import type { ReactNode, Ref } from "react";
+import { useTopSheet } from "./sheet-layers.js";
 import {
   KeyboardAvoidingView,
   Modal,
@@ -259,6 +260,7 @@ export function SurfaceSheet(
     side?: boolean;
   },
 ) {
+  const topSheet = useTopSheet();
   const styles = useFactoryStyles(props);
   const { theme, layout, side, narrow } = props;
   const sheet = useMemo(() => {
@@ -298,13 +300,23 @@ export function SurfaceSheet(
     };
   }, [theme, layout.compact, side, narrow, styles.header]);
   return (
-    <Modal transparent visible animationType="none" onRequestClose={props.onClose}>
+    <Modal
+      transparent
+      visible
+      animationType="none"
+      onRequestClose={props.onClose}
+      accessibilityLabel={props.title}
+      aria-hidden={!topSheet}
+      accessibilityElementsHidden={!topSheet}
+      importantForAccessibility={topSheet ? "auto" : "no-hide-descendants"}
+    >
       <KeyboardAvoidingView
         behavior={props.layout.platform === "ios" ? "padding" : "height"}
         style={sheet.overlay}
       >
         <Pressable
-          accessibilityLabel="Dismiss dialog"
+          accessibilityRole="button"
+          accessibilityLabel={`Close ${props.title} by dismissing backdrop`}
           onPress={props.onClose}
           style={sheet.dismiss}
         />

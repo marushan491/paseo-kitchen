@@ -19,6 +19,14 @@ const execute = promisify(execFile);
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "kitchen-workflow-"));
 });
+it("validates an imported workflow without writing or weakening the runtime gates", async () => {
+  const store = new WorkflowDefinitions(root, new PackRegistry());
+  const definition = definitionFromPack(kitchenPack, "import-preview");
+  expect(store.validate(definition)).toEqual(definition);
+  expect(await store.list()).toEqual([]);
+  definition.roles.verifier.canEdit = true;
+  expect(() => store.validate(definition)).toThrow("Verifier");
+});
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
@@ -138,4 +146,16 @@ it("allows Verifier behavior and skill customization while preserving its indepe
   expect(validateDefinition(value, kitchenPack).roles.verifier.skills).toEqual(["code-review"]);
   value.roles.verifier.workspace = "team";
   expect(() => validateDefinition(value, kitchenPack)).toThrow("read-only workspace");
+});
+
+it("rejects routes that require the feature checkout before Developer creates it", () => {
+  const value = definitionFromPack(kitchenPack, "early-review");
+  value.boards.item.phases.ready.next = "review";
+  expect(() => validateDefinition(value, kitchenPack)).toThrow("after Build");
+  value.boards.item.phases.ready.next = "implement";
+  value.roles.developer.workspace = "item-worktree";
+  expect(() => validateDefinition(value, kitchenPack)).toThrow("isolated worktree");
+  value.roles.developer.canEdit = false;
+  value.roles.developer.workspace = "team";
+  expect(() => validateDefinition(value, kitchenPack)).toThrow("isolated worktree");
 });

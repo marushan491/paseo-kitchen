@@ -148,13 +148,15 @@ A **team preset** selects how a mission executes. A **workflow pack** is its tec
 
 Select a baseline or saved team in the editor. Select a role to edit its responsibility, instructions, installed skill names and optional provider/model settings. **Head Chef preferences** configures the ordinary coordinating session for new missions using that team. Select a connection to inspect its actual outcome and target, change its draft target or restore the inherited return limit. **Save changes** validates and persists a new revision. Existing missions keep their executed snapshot.
 
-Choose the **Work board** you want to edit. **Mission plan and integration** coordinates planning, combined integration and final verification. **Task build and verification** controls each individual task's Build, Review and Verify path. Role cards show the stage's purpose and actual role name. Red return routes send work back for corrections. Other workflow states sit below the working path.
+Choose **Workflow level**: **Mission delivery** shows planning, combined integration and final verification; **Each feature** controls an individual task's Build, Review and Verify path. Drag a card to move it. Drag or click an output and then its destination to change the real handoff. Red routes return work for corrections. Secondary states are available under **Show workflow states**, **Fit** or **List**.
 
-**Graph** opens at a readable scale focused on the working path and its return routes. **Fit** includes every workflow state; **1:1** restores actual size. Scroll or pinch to zoom around the pointer, drag the background to pan, or use Shift-scroll for horizontal movement. With the canvas focused, use **+**, **−**, **0**, **F** and the arrow keys. **List** shows the same stages and connections and is the compact default. Select a role or connection to open its editor.
+Scroll or pinch to zoom, drag the background to pan, and use **Auto-arrange** to restore the role layout. **1:1** restores full-size cards. **List** is the compact default. **+ Add role** inserts a manually configured stage on an existing handoff. **Describe a change to Kitchen** opens the AI preview workflow.
+
+**+ Add skill** searches the discovered host/project skill catalog and suggests matches for the role. Expand **Workflow JSON** below the graph to edit, validate, import or copy the full configuration. The [workflow guide](docs/workflows.md) describes node types, outcomes, custom stages, protected gates and sharing JSON through GitHub.
 
 Custom executable variants use the verified Standard or Single baseline. The runtime preserves the final integration/verification/acceptance path and independent Verifier policy. You can customize the Verifier's title, instructions and skills while its workspace, tools and read-only policy remain protected. Every successful item path still requires Review and independent verification.
 
-**Ask Kitchen to change this team** produces a typed Jev preview. Supported changes include conditional Security/Database reviews, editable or read-only review, returns to Build, clarification routing, work requests and Head Chef architecture decisions. Inspect the preview before applying it. Ambiguous, unsupported or low-confidence requests do not silently change the team. This feature does not generate arbitrary executable code or remove verification gates.
+**Describe a change to Kitchen** produces a typed Jev preview. Supported changes include conditional Security/Database reviews, editable or read-only review, returns to Build, clarification routing, work requests and Head Chef architecture decisions. Inspect the preview before applying it. Ambiguous, unsupported or low-confidence requests do not silently change the team. This feature does not generate arbitrary executable code or remove verification gates.
 
 Conditional reviews inspect actual committed Git changes against their baseline. The configured relative paths or suffixes decide whether a check runs. A persisted skip appears as **Skipped · no matching changes**, separately from completed checks. A later return to that phase invalidates the previous skip. Missing change evidence blocks progress rather than silently bypassing a check. Reusable recipes live under **Reusable role presets**. Naming a skill does not install it; the selected harness must have it available.
 
@@ -163,7 +165,7 @@ Conditional reviews inspect actual committed Git changes against their baseline.
 
 ![Task build and verification workflow](docs/screenshots/workflow-task.png)
 
-This work board controls individual tasks, including Review/Verify returns to Build. It is separate from the mission's combined integration path.
+The **Each feature** level controls individual tasks, including Review/Verify returns to Build. It is separate from the mission's combined integration path.
 
 ![Role responsibility, inherited model, skills and communication](docs/screenshots/role-editor.png)
 
@@ -172,6 +174,18 @@ Select a role to configure its responsibility, model inheritance, installed skil
 ![Real report outcome and draft route settings](docs/screenshots/workflow-connection.png)
 
 The connection inspector explains which actual report outcome chooses the next stage. Editing the draft does not alter a running mission's selected revision.
+
+![Manual role creation on a real Build-to-Review handoff](docs/screenshots/workflow-add-role.png)
+
+**+ Add role** inserts a stage after Build, where the feature checkout already exists. Name its responsibility, choose a handoff and set its access and communication. This screenshot shows an unsaved example; **Save changes** persists the complete team.
+
+![Discovered skills with search and actual provider availability](docs/screenshots/skills.png)
+
+The picker reads installed skill metadata, suggests matches for the role and separates advertised providers from other discovered folders. Adding a skill requests it from the harness; it does not install or guarantee loading it.
+
+![Expanded editable workflow JSON with an independent scrollbar](docs/screenshots/workflow-json.png)
+
+**Workflow JSON** expands below the graph. **Validate and apply to draft** checks the configuration without starting agents. **Copy JSON** exports the visible text; **Reload from graph** discards source edits. The [workflow guide](docs/workflows.md) covers node types, custom roles, import and GitHub sharing.
 
 </details>
 
@@ -193,7 +207,7 @@ The current Team editor was also checked in an actual 430-pixel Mac Electron win
 
 <img src="docs/screenshots/compact-team-role.png" alt="Compact role editor with responsibility, inherited model, skills and communication settings" width="320">
 
-Capture identities and image hashes are retained in [the screenshot receipts](docs/screenshots/captures.json).
+Capture identities and image hashes are retained in [the screenshot receipts](docs/screenshots/captures.json). The [UI review](docs/ux-review.md) records the actual walkthrough, axe results, manual UX rating and remaining device checks.
 
 ## Mission continuity and acceptance
 

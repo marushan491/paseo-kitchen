@@ -1,16 +1,22 @@
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { kitchenStations, stageForRole } from "./kitchen-stations.js";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
-import { useCallback, useMemo, useState, useEffect, useId } from "react";
-import { PanResponder, Pressable, Text, View } from "react-native";
+import { useCallback, useMemo, useState, useEffect, useId, useRef, type RefObject } from "react";
+import { PanResponder, Platform, Pressable, Text, View } from "react-native";
 import type { RoleWorkflow } from "../shared/role-builder.js";
 import { Action, Field, SurfaceSheet, useFactoryStyles } from "./ui.js";
 import { Choice } from "./choice.js";
-import { GraphViewport } from "./graph-viewport.js";
+import { GraphViewport, type GraphViewportHandle } from "./graph-viewport.js";
 import {
   clampGraphZoom,
   graphNodeSize,
+  graphPortSize,
   graphConnections,
+  graphInputPoint,
+  graphOutputPoint,
+  graphDropTarget,
+  graphOutcomeTitle,
+  graphPhaseTitle,
   layoutRoleGraph,
   updateGraphConnection,
   type GraphConnection,
@@ -57,11 +63,33 @@ export function RoleGraph(props: RoleGraphProps) {
   const [selected, setSelected] = useState<GraphConnection | null>(null);
   const [phaseId, setPhase] = useState("");
   const [positions, setPositions] = useState<Record<string, GraphPoint>>({});
+  const [showStates, setShowStates] = useState(false);
+  const [connecting, setConnecting] = useState<GraphConnection | null>(null);
+  const [dragPoint, setDragPoint] = useState<GraphPoint | null>(null);
+  const [connectionError, setConnectionError] = useState("");
+  const viewportRef = useRef<GraphViewportHandle>(null);
   const board = props.workflow.boards[boardId] ? boardId : boards[0];
   const graph = useMemo(
     () => layoutRoleGraph(props.workflow, board, positions),
     [props.workflow, board, positions],
   );
+  const visibleNodes = useMemo(
+    () => graph.nodes.filter((node) => showStates || node.primary),
+    [graph.nodes, showStates],
+  );
+  const visibleIds = useMemo(() => new Set(visibleNodes.map((node) => node.id)), [visibleNodes]);
+  const visibleRoutes = useMemo(
+    () =>
+      graph.routes.filter(
+        (route) => visibleIds.has(route.edge.from) && visibleIds.has(route.edge.to),
+      ),
+    [graph.routes, visibleIds],
+  );
+  const secondaryCount = graph.nodes.filter((node) => !node.primary).length;
+  const hovered = dragPoint ? graphDropTarget(visibleNodes, dragPoint)?.id : undefined;
+  const previewStart = connecting
+    ? graph.nodes.find((node) => node.id === connecting.from)
+    : undefined;
   const statesStyle = useMemo(
     () => ({
       position: "absolute" as const,
@@ -76,7 +104,7 @@ export function RoleGraph(props: RoleGraphProps) {
   );
   useEffect(() => setMode(props.layout.compact ? "list" : "graph"), [props.layout.compact]);
   const chooseMode = useCallback((value: string) => setMode(value), []);
-  const { onRole, onConnection } = props;
+  const { onRole, onConnection, onChange } = props;
   const inspect = useCallback(
     (edge: GraphConnection) => {
       if (onConnection) onConnection(edge);
@@ -92,6 +120,63 @@ export function RoleGraph(props: RoleGraphProps) {
     [onRole],
   );
   const dismiss = useCallback(() => setSelected(null), []);
+  const cancelConnection = useCallback(() => {
+    setConnecting(null);
+    setDragPoint(null);
+    setConnectionError("");
+  }, []);
+  const startConnection = useCallback(
+    (edge: GraphConnection) => {
+      if (!props.onChange) {
+        inspect(edge);
+        return;
+      }
+      setConnectionError("");
+      setConnecting(edge);
+      setDragPoint(null);
+    },
+    [props.onChange, inspect],
+  );
+  const connect = useCallback(
+    (edge: GraphConnection, target: string) => {
+      try {
+        const phase = props.workflow.boards[edge.board].phases[edge.from] as GraphPhase;
+        const changed = updateGraphConnection(props.workflow, edge, target, phase.maxReturns);
+        onChange?.(changed);
+        setConnecting(null);
+        setDragPoint(null);
+        setConnectionError("");
+        inspect({ ...edge, to: target });
+      } catch (cause) {
+        setConnectionError(cause instanceof Error ? cause.message : String(cause));
+      }
+    },
+    [props.workflow, onChange, inspect],
+  );
+  const receiveConnection = useCallback(
+    (id: string) => {
+      if (connecting) connect(connecting, id);
+    },
+    [connecting, connect],
+  );
+  const dragConnection = useCallback(
+    (edge: GraphConnection, point: GraphPoint) => {
+      if (!props.onChange) return;
+      setConnecting(edge);
+      setDragPoint(viewportRef.current?.toGraphPoint(point) ?? null);
+    },
+    [props.onChange],
+  );
+  const dropConnection = useCallback(
+    (edge: GraphConnection, point: GraphPoint) => {
+      const world = viewportRef.current?.toGraphPoint(point);
+      const target = world ? graphDropTarget(visibleNodes, world) : undefined;
+      setDragPoint(null);
+      if (target) connect(edge, target.id);
+    },
+    [visibleNodes, connect],
+  );
+  const toggleStates = useCallback(() => setShowStates((value) => !value), []);
   const dismissPhase = useCallback(() => setPhase(""), []);
   const changeZoom = useCallback(
     (amount: number) => setZoom((value) => clampGraphZoom(value + amount)),
@@ -99,10 +184,14 @@ export function RoleGraph(props: RoleGraphProps) {
   );
   const naturalSize = useCallback(() => setZoom(100), []);
   const fit = useCallback(() => {
+    setShowStates(true);
     setFitKey((value) => value + 1);
   }, []);
   const arrange = useCallback(() => {
     setPositions({});
+    setShowStates(false);
+    setConnecting(null);
+    setDragPoint(null);
     setArrangeKey((value) => value + 1);
   }, []);
   const moveNode = useCallback(
@@ -114,6 +203,10 @@ export function RoleGraph(props: RoleGraphProps) {
     setPositions({});
     setSelected(null);
     setPhase("");
+    setShowStates(false);
+    setConnecting(null);
+    setDragPoint(null);
+    setConnectionError("");
   }, []);
   const options = useMemo(() => boards.map((id) => ({ id, title: boardTitle(id) })), [boards]);
   return (
@@ -122,7 +215,7 @@ export function RoleGraph(props: RoleGraphProps) {
         <View style={toolbarStyles.board}>
           <Choice
             {...props}
-            label="Work board"
+            label="Workflow level"
             value={board}
             options={options}
             onChange={chooseBoard}
@@ -184,6 +277,19 @@ export function RoleGraph(props: RoleGraphProps) {
               onAction={fit}
               compact={props.layout.compact}
             />
+            {secondaryCount ? (
+              <Action
+                theme={props.theme}
+                title={
+                  showStates ? "Hide workflow states" : `Show workflow states (${secondaryCount})`
+                }
+                accessibilityLabel={showStates ? "Hide workflow states" : "Show workflow states"}
+                value="states"
+                selected={showStates}
+                onAction={toggleStates}
+                compact={props.layout.compact}
+              />
+            ) : null}
             <Action
               theme={props.theme}
               title="Auto-arrange"
@@ -194,6 +300,16 @@ export function RoleGraph(props: RoleGraphProps) {
           </View>
         ) : null}
       </View>
+      <Text style={styles.muted}>{boardPurpose(board, props.workflow)}</Text>
+      {mode === "graph" ? (
+        <ConnectionHint
+          {...props}
+          connecting={connecting}
+          board={board}
+          onCancel={cancelConnection}
+        />
+      ) : null}
+      {connectionError ? <Text style={styles.danger}>{connectionError}</Text> : null}
       {mode === "graph" ? (
         <>
           <GraphViewport
@@ -206,16 +322,18 @@ export function RoleGraph(props: RoleGraphProps) {
             viewKey={`${board}:${arrangeKey}`}
             focus={graph.focus}
             onScale={setGraphScale}
+            controllerRef={viewportRef}
+            onFit={fit}
           >
-            {graph.statesY ? (
+            {showStates && graph.statesY ? (
               <View style={statesStyle}>
                 <Text style={styles.muted}>Other workflow states</Text>
               </View>
             ) : null}
-            {graph.routes.map((route) => (
+            {visibleRoutes.map((route) => (
               <ConnectionPath key={route.edge.id} {...props} route={route} onInspect={inspect} />
             ))}
-            {graph.nodes.map((node) => (
+            {visibleNodes.map((node) => (
               <PhaseNode
                 key={node.id}
                 {...props}
@@ -224,12 +342,29 @@ export function RoleGraph(props: RoleGraphProps) {
                 onMove={moveNode}
                 scale={graphScale}
                 initial={node.id === props.workflow.boards[board].initialPhase}
+                connecting={connecting}
+                targeted={hovered === node.id}
+                onOutput={startConnection}
+                onInput={receiveConnection}
+                onDragOutput={dragConnection}
+                onDropOutput={dropConnection}
               />
             ))}
+            {connecting && previewStart && dragPoint ? (
+              <View pointerEvents="none">
+                <RouteSegment
+                  {...props}
+                  from={graphOutputPoint(previewStart, connecting)}
+                  to={dragPoint}
+                  terminal={false}
+                  returning={false}
+                />
+              </View>
+            ) : null}
           </GraphViewport>
           <Text style={styles.muted}>
-            Scroll or pinch to zoom. Drag the background to pan. Red routes return work for
-            corrections. Fit includes every workflow state.
+            Drag a stage to move it. Drag an output to an input, or tap each in turn. Drag the
+            background to pan; scroll to zoom. Red routes request corrections.
           </Text>
         </>
       ) : (
@@ -245,81 +380,276 @@ export function RoleGraph(props: RoleGraphProps) {
         Verification and human acceptance stay enforced by Kitchen. Editing a route does not grant
         tools or bypass those gates.
       </Text>
-      {selected ? (
-        <ConnectionInspector key={selected.id} {...props} edge={selected} onClose={dismiss} />
-      ) : null}
-      {phaseId && props.workflow.boards[board]?.phases[phaseId] ? (
-        <PhaseInspector
-          {...props}
-          phase={props.workflow.boards[board].phases[phaseId]}
-          initial={phaseId === props.workflow.boards[board].initialPhase}
-          childBoard={props.workflow.boards.item ? "item" : undefined}
-          onBoard={chooseBoard}
-          onClose={dismissPhase}
+      <GraphInspectors
+        {...props}
+        selected={selected}
+        phaseId={phaseId}
+        board={board}
+        onCloseConnection={dismiss}
+        onClosePhase={dismissPhase}
+        onBoard={chooseBoard}
+      />
+    </View>
+  );
+}
+function ConnectionHint(
+  props: RoleGraphProps & {
+    connecting: GraphConnection | null;
+    board: string;
+    onCancel(): void;
+  },
+) {
+  const styles = useFactoryStyles(props);
+  const row = useMemo(() => ({ ...styles.row, height: 48, gap: 8 }), [styles.row]);
+  const text = useMemo(() => ({ ...styles.text, flex: 1 }), [styles.text]);
+  return (
+    <View style={row}>
+      <Text style={text} numberOfLines={2}>
+        {props.connecting
+          ? `Connecting ${props.workflow.boards[props.board].phases[props.connecting.from].title}: ${graphOutcomeTitle(props.connecting)}. Select an input or drag to a stage.`
+          : "Select an output to inspect or connect a handoff."}
+      </Text>
+      {props.connecting ? (
+        <Action
+          theme={props.theme}
+          title="Cancel connection"
+          value="cancel"
+          onAction={props.onCancel}
         />
       ) : null}
     </View>
   );
 }
+function GraphInspectors(
+  props: RoleGraphProps & {
+    selected: GraphConnection | null;
+    phaseId: string;
+    board: string;
+    onCloseConnection(): void;
+    onClosePhase(): void;
+    onBoard(id: string): void;
+  },
+) {
+  const phase = props.workflow.boards[props.board]?.phases[props.phaseId];
+  return (
+    <>
+      {props.selected ? (
+        <ConnectionInspector
+          key={`${props.selected.id}:${props.selected.to}`}
+          {...props}
+          edge={props.selected}
+          onClose={props.onCloseConnection}
+        />
+      ) : null}
+      {phase ? (
+        <PhaseInspector
+          {...props}
+          phase={phase}
+          initial={props.phaseId === props.workflow.boards[props.board].initialPhase}
+          childBoard={props.workflow.boards.item ? "item" : undefined}
+          onClose={props.onClosePhase}
+        />
+      ) : null}
+    </>
+  );
+}
 function boardTitle(id: string) {
-  if (id === "root") return "Mission plan and integration";
-  if (id === "item") return "Task build and verification";
+  if (id === "root") return "Mission delivery";
+  if (id === "item") return "Each feature";
   return id;
+}
+function boardPurpose(id: string, workflow: RoleWorkflow) {
+  if (id === "root") {
+    const integrates = Object.values(workflow.boards.root.phases).some(
+      (phase) => phase.role === "integrator",
+    );
+    return integrates
+      ? "Plan the mission, run each feature, then combine and verify the complete result."
+      : "Coordinate the complete mission and inspect its result.";
+  }
+  if (id === "item")
+    return "Each feature runs its own build and checks before mission delivery continues.";
+  return "Edit the stages and declared outcomes for this workflow level.";
+}
+interface GraphPointerEvent {
+  button: number;
+  pointerId: number;
+  pointerType: string;
+  pageX: number;
+  pageY: number;
+  preventDefault(): void;
+  stopPropagation(): void;
+}
+interface GraphPointerElement {
+  addEventListener(
+    name: string,
+    listener: (event: GraphPointerEvent) => void,
+    capture?: boolean,
+  ): void;
+  removeEventListener(
+    name: string,
+    listener: (event: GraphPointerEvent) => void,
+    capture?: boolean,
+  ): void;
+  setPointerCapture(id: number): void;
+  releasePointerCapture(id: number): void;
+}
+function useGraphPointerDrag(
+  target: RefObject<View | null>,
+  enabled: boolean,
+  callbacks: {
+    start(): void;
+    move(point: GraphPoint, delta: GraphPoint): void;
+    end(point: GraphPoint): void;
+  },
+) {
+  const latest = useRef(callbacks);
+  latest.current = callbacks;
+  useEffect(() => {
+    if (Platform.OS !== "web" || !enabled) return;
+    const element = target.current as unknown as GraphPointerElement | null;
+    if (!element?.addEventListener) return;
+    let active: { id: number; x: number; y: number } | undefined;
+    let moved = false;
+    const down = (event: GraphPointerEvent) => {
+      if (event.button !== 0 || event.pointerType === "touch") return;
+      event.stopPropagation();
+      active = { id: event.pointerId, x: event.pageX, y: event.pageY };
+      moved = false;
+      element.setPointerCapture(event.pointerId);
+      latest.current.start();
+    };
+    const move = (event: GraphPointerEvent) => {
+      if (active?.id !== event.pointerId) return;
+      const delta = { x: event.pageX - active.x, y: event.pageY - active.y };
+      if (!moved && Math.abs(delta.x) + Math.abs(delta.y) <= 3) return;
+      moved = true;
+      event.preventDefault();
+      event.stopPropagation();
+      latest.current.move({ x: event.pageX, y: event.pageY }, delta);
+    };
+    const up = (event: GraphPointerEvent) => {
+      if (active?.id !== event.pointerId) return;
+      event.stopPropagation();
+      active = undefined;
+      element.releasePointerCapture(event.pointerId);
+      if (moved) latest.current.end({ x: event.pageX, y: event.pageY });
+    };
+    const cancel = () => {
+      active = undefined;
+    };
+    const mouseDown = (event: GraphPointerEvent) => {
+      if (active) event.stopPropagation();
+    };
+    const click = (event: GraphPointerEvent) => {
+      if (!moved) return;
+      moved = false;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const listeners = {
+      pointerdown: down,
+      pointermove: move,
+      pointerup: up,
+      pointercancel: cancel,
+      mousedown: mouseDown,
+      click,
+    };
+    for (const [name, listener] of Object.entries(listeners))
+      element.addEventListener(name, listener, true);
+    return () => {
+      for (const [name, listener] of Object.entries(listeners))
+        element.removeEventListener(name, listener, true);
+    };
+  }, [target, enabled]);
 }
 function PhaseNode(
   props: RoleGraphProps & {
     node: GraphNode;
     initial: boolean;
     scale: number;
+    connecting: GraphConnection | null;
+    targeted: boolean;
     onMove(id: string, point: GraphPoint): void;
     onInspect(node: GraphNode): void;
+    onInput(id: string): void;
+    onOutput(edge: GraphConnection): void;
+    onDragOutput(edge: GraphConnection, point: GraphPoint): void;
+    onDropOutput(edge: GraphConnection, point: GraphPoint): void;
   },
 ) {
-  const { node, onInspect, onMove, scale } = props;
+  const { node, onInspect, onInput, connecting } = props;
   const nativeId = useId();
-  const styles = useFactoryStyles(props);
+  const latest = useRef(props);
+  latest.current = props;
+  const origin = useRef<GraphPoint>({ x: node.x, y: node.y });
+  const header = useRef<View>(null);
+  useGraphPointerDrag(header, true, {
+    start: () => {
+      origin.current = { x: latest.current.node.x, y: latest.current.node.y };
+    },
+    move: (_, delta) =>
+      latest.current.onMove(latest.current.node.id, {
+        x: Math.max(20, origin.current.x + delta.x / latest.current.scale),
+        y: Math.max(40, origin.current.y + delta.y / latest.current.scale),
+      }),
+    end: () => {},
+  });
   const select = useCallback(() => onInspect(node), [onInspect, node]);
+  const receive = useCallback(() => {
+    if (connecting) onInput(node.id);
+    else onInspect(node);
+  }, [connecting, onInput, node, onInspect]);
   const drag = useMemo(
     () =>
       PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
         onMoveShouldSetPanResponder: (_, state) =>
-          state.numberActiveTouches === 1 && Math.abs(state.dx) + Math.abs(state.dy) > 8,
-        onPanResponderRelease: (_, state) => {
-          const estimatedScale = scale;
-          onMove(node.id, {
-            x: Math.max(20, node.x + state.dx / estimatedScale),
-            y: Math.max(40, node.y + state.dy / estimatedScale),
-          });
+          state.numberActiveTouches === 1 && Math.abs(state.dx) + Math.abs(state.dy) > 3,
+        onPanResponderGrant: () => {
+          origin.current = { x: latest.current.node.x, y: latest.current.node.y };
         },
+        onPanResponderMove: (_, state) =>
+          latest.current.onMove(latest.current.node.id, {
+            x: Math.max(20, origin.current.x + state.dx / latest.current.scale),
+            y: Math.max(40, origin.current.y + state.dy / latest.current.scale),
+          }),
         onPanResponderTerminationRequest: () => true,
       }),
-    [node, onMove, scale],
+    [],
   );
   const role = node.phase.role ? props.workflow.roles[node.phase.role] : undefined;
   const name =
     node.phase.role === props.selectedRole && props.roleName ? props.roleName : role?.title;
   const presentation = phasePresentation(props, node);
-  const nodeStyles = useMemo(() => {
+  const styles = useMemo(() => {
     let borderColor = node.phase.role ? presentation.color : props.theme.colors.border;
-    if (props.selectedRole === node.phase.role && props.selectedRole)
+    if (props.targeted || (props.selectedRole === node.phase.role && props.selectedRole))
       borderColor = props.theme.colors.accent;
     return {
-      card: {
+      frame: {
         position: "absolute" as const,
         left: node.x,
         top: node.y,
         width: graphNodeSize.width,
-        height: graphNodeSize.height,
-        padding: 14,
-        paddingTop: 16,
-        gap: 6,
+        height: node.height,
+      },
+      card: {
+        flex: 1,
         overflow: "hidden" as const,
         borderRadius: 12,
-        borderWidth: 1,
+        borderWidth: props.targeted ? 2 : 1,
         borderColor,
         backgroundColor: node.phase.role
           ? props.theme.colors.surface1
           : props.theme.colors.surface0,
+      },
+      header: {
+        height: graphNodeSize.height - graphPortSize,
+        paddingHorizontal: 14,
+        paddingTop: 12,
+        paddingBottom: 8,
+        gap: 4,
       },
       tint: {
         position: "absolute" as const,
@@ -348,31 +678,153 @@ function PhaseNode(
       },
       purpose: { color: props.theme.colors.foreground, fontSize: 13, lineHeight: 17 },
       role: { color: props.theme.colors.foregroundMuted, fontSize: 11, lineHeight: 14 },
-      initial: { color: props.theme.colors.foregroundMuted, fontSize: 11 },
+      input: {
+        position: "absolute" as const,
+        left: -graphPortSize / 2,
+        top: graphInputPoint(node).y - node.y - graphPortSize / 2,
+        width: graphPortSize,
+        height: graphPortSize,
+        alignItems: "center" as const,
+        justifyContent: "center" as const,
+      },
+      dot: {
+        width: 16,
+        height: 16,
+        borderRadius: 8,
+        borderWidth: 3,
+        borderColor: presentation.color,
+        backgroundColor: connecting ? props.theme.colors.accent : props.theme.colors.surface0,
+      },
     };
-  }, [node, props.selectedRole, props.theme, presentation.color]);
+  }, [node, props.targeted, props.selectedRole, props.theme, presentation.color, connecting]);
+  return (
+    <View style={styles.frame} {...drag.panHandlers}>
+      <View style={styles.card}>
+        {node.phase.role ? <View pointerEvents="none" style={styles.tint} /> : null}
+        {node.phase.role ? <View pointerEvents="none" style={styles.stripe} /> : null}
+        <Pressable
+          ref={header}
+          accessibilityRole="button"
+          accessibilityLabel={`Workflow phase ${node.phase.title}${name ? `, ${name}` : ""}`}
+          accessibilityHint="Drag to move this stage, or select to edit its role."
+          nativeID={nativeId}
+          onPress={select}
+          style={styles.header}
+        >
+          <View style={styles.row}>
+            <Icon name={presentation.icon} size={20} color={presentation.color} />
+            <Text style={styles.title} numberOfLines={2}>
+              {presentation.title}
+            </Text>
+          </View>
+          {presentation.purpose ? <Text style={styles.purpose}>{presentation.purpose}</Text> : null}
+          <Text style={styles.role} numberOfLines={1}>
+            {name || phasePurpose(node.phase)}
+          </Text>
+        </Pressable>
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Input ${node.phase.title}`}
+        accessibilityHint={
+          connecting
+            ? "Connect the selected output to this stage."
+            : "Select an output first to connect it here."
+        }
+        onPress={receive}
+        style={styles.input}
+      >
+        <View pointerEvents="none" style={styles.dot} />
+      </Pressable>
+      {node.outputs.map((edge) => (
+        <OutputPort key={edge.id} {...props} edge={edge} selected={connecting?.id === edge.id} />
+      ))}
+    </View>
+  );
+}
+function OutputPort(
+  props: Parameters<typeof PhaseNode>[0] & { edge: GraphConnection; selected: boolean },
+) {
+  const latest = useRef(props);
+  latest.current = props;
+  const port = useRef<View>(null);
+  useGraphPointerDrag(port, Boolean(props.onChange), {
+    start: () => latest.current.onOutput(latest.current.edge),
+    move: (point) => latest.current.onDragOutput(latest.current.edge, point),
+    end: (point) => latest.current.onDropOutput(latest.current.edge, point),
+  });
+  const { onOutput, edge } = props;
+  const press = useCallback(() => onOutput(edge), [onOutput, edge]);
+  const drag = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        onMoveShouldSetPanResponder: (_, state) =>
+          Boolean(latest.current.onChange) &&
+          state.numberActiveTouches === 1 &&
+          Math.abs(state.dx) + Math.abs(state.dy) > 2,
+        onPanResponderGrant: () => latest.current.onOutput(latest.current.edge),
+        onPanResponderMove: (_, state) =>
+          latest.current.onDragOutput(latest.current.edge, { x: state.moveX, y: state.moveY }),
+        onPanResponderRelease: (event) =>
+          latest.current.onDropOutput(latest.current.edge, {
+            x: event.nativeEvent.pageX,
+            y: event.nativeEvent.pageY,
+          }),
+        onPanResponderTerminationRequest: () => false,
+      }),
+    [],
+  );
+  const styles = useMemo(() => {
+    const negative = ["changes", "fail"].includes(props.edge.label);
+    const color = negative ? props.theme.colors.statusDanger : props.theme.colors.accent;
+    return {
+      port: {
+        position: "absolute" as const,
+        left: 14,
+        right: -14,
+        top: graphOutputPoint(props.node, props.edge).y - props.node.y - graphPortSize / 2,
+        height: graphPortSize,
+        paddingRight: 6,
+        flexDirection: "row" as const,
+        alignItems: "center" as const,
+        justifyContent: "space-between" as const,
+        gap: 8,
+      },
+      label: {
+        color: props.selected ? color : props.theme.colors.foreground,
+        fontSize: 12,
+        lineHeight: 16,
+        fontWeight: "600" as const,
+        flexShrink: 1,
+      },
+      dot: {
+        width: 16,
+        height: 16,
+        borderRadius: 8,
+        borderWidth: 3,
+        borderColor: color,
+        backgroundColor: props.selected ? color : props.theme.colors.surface0,
+      },
+    };
+  }, [props.edge, props.node, props.selected, props.theme]);
   return (
     <Pressable
+      ref={port}
       accessibilityRole="button"
-      accessibilityLabel={`Workflow phase ${node.phase.title}${name ? `, ${name}` : ""}`}
-      nativeID={nativeId}
-      onPress={select}
-      style={nodeStyles.card}
+      accessibilityLabel={`Output ${props.node.phase.title}: ${graphOutcomeTitle(props.edge)}`}
+      accessibilityHint={`Connect this actual ${props.edge.label} outcome. Current target: ${props.workflow.boards[props.edge.board].phases[props.edge.to]?.title}.`}
+      onPress={press}
+      style={styles.port}
       {...drag.panHandlers}
     >
-      {node.phase.role ? <View pointerEvents="none" style={nodeStyles.tint} /> : null}
-      {node.phase.role ? <View pointerEvents="none" style={nodeStyles.stripe} /> : null}
-      <View style={nodeStyles.row}>
-        <Icon name={presentation.icon} size={20} color={presentation.color} />
-        <Text style={nodeStyles.title} numberOfLines={2}>
-          {presentation.title}
-        </Text>
-      </View>
-      {presentation.purpose ? <Text style={nodeStyles.purpose}>{presentation.purpose}</Text> : null}
-      <Text style={node.phase.role ? nodeStyles.role : styles.muted} numberOfLines={2}>
-        {name || phasePurpose(node.phase)}
+      <Text style={styles.label}>
+        {graphOutcomeTitle(props.edge)}
+        {props.workflow.boards[props.edge.board].phases[props.edge.to]?.role
+          ? ""
+          : ` → ${props.workflow.boards[props.edge.board].phases[props.edge.to]?.title}`}
       </Text>
-      {props.initial ? <Text style={nodeStyles.initial}>Start here</Text> : null}
+      <View pointerEvents="none" style={styles.dot} />
     </Pressable>
   );
 }
@@ -402,7 +854,11 @@ function phasePresentation(props: RoleGraphProps, node: GraphNode) {
   if (stage === "plan" || stage === "review") color = colors.statusWarning;
   if (stage === "verify" || stage === "final") color = colors.statusSuccess;
   return {
-    title: stage === "head" ? node.phase.title : station!.title,
+    title: graphPhaseTitle(
+      props.workflow,
+      props.workflow.boards.root?.phases[node.id] === node.phase ? "root" : "item",
+      node.id,
+    ),
     purpose: stage === "head" ? undefined : station!.purpose,
     icon: icons[stage] || "Workflow",
     color,
@@ -472,7 +928,7 @@ function ConnectionPath(
         style={label}
       >
         <Text style={labelText}>
-          {route.edge.label}
+          {graphOutcomeTitle(route.edge)}
           {route.returning ? " ↩" : " →"}
         </Text>
       </Pressable>
@@ -553,7 +1009,7 @@ function PhaseRow(
     <View style={styles.card}>
       <Action
         theme={props.theme}
-        title={node.phase.title}
+        title={phasePresentation(props, node).title}
         accessibilityLabel={`Workflow phase ${node.phase.title}`}
         value="phase"
         onAction={open}
@@ -565,14 +1021,18 @@ function PhaseRow(
         <Action
           key={edge.id}
           theme={props.theme}
-          title={`${edge.label} → ${props.workflow.boards[edge.board].phases[edge.to]?.title || edge.to}`}
-          accessibilityLabel={`Connection ${node.phase.title}: ${edge.label}`}
+          title={`${graphOutcomeTitle(edge)} → ${listDestination(props, edge.to)}`}
+          accessibilityLabel={`Connection ${node.phase.title}: ${graphOutcomeTitle(edge)}`}
           value={edge}
           onAction={props.onInspect}
         />
       ))}
     </View>
   );
+}
+function listDestination(props: Parameters<typeof ConnectionList>[0], id: string) {
+  const node = props.nodes.find((entry) => entry.id === id);
+  return node ? phasePresentation(props, node).title : id;
 }
 function ConnectionInspector(props: RoleGraphProps & { edge: GraphConnection; onClose(): void }) {
   const styles = useFactoryStyles(props);
@@ -625,7 +1085,7 @@ function ConnectionInspector(props: RoleGraphProps & { edge: GraphConnection; on
         {from.title} → {to.title}
       </Text>
       <Text style={styles.muted}>When</Text>
-      <Text style={styles.text}>{edge.label}</Text>
+      <Text style={styles.text}>{graphOutcomeTitle(edge)}</Text>
       <Text style={styles.muted}>{connectionPurpose(edge)}</Text>
       {onChange ? (
         <>
@@ -647,8 +1107,8 @@ function ConnectionInspector(props: RoleGraphProps & { edge: GraphConnection; on
             />
           ) : null}
           <Text style={styles.muted}>
-            This changes the draft. Save the workflow to validate and publish it; running missions
-            keep their selected revision.
+            Save changes to keep this handoff for new missions. Running missions keep their
+            snapshot.
           </Text>
         </>
       ) : (
@@ -658,8 +1118,8 @@ function ConnectionInspector(props: RoleGraphProps & { edge: GraphConnection; on
       )}
       <Text style={styles.muted}>Context</Text>
       <Text style={styles.text}>
-        Kitchen records the report and dispatches the target phase’s configured role. Agent
-        permissions and verification requirements are separate from this connection.
+        Kitchen sends work to the selected stage. Agent permissions and verification requirements
+        stay enforced.
       </Text>
       {phase.condition ? (
         <>
@@ -686,7 +1146,7 @@ function connectionPurpose(edge: GraphConnection) {
   if (edge.kind === "children") return "Advance only after scoped work is verified.";
   if (edge.kind === "skip") return "Skip only when the configured file condition does not match.";
   if (edge.kind === "next") return "Automatic advancement from a waiting phase.";
-  return "An actual factory-report outcome determines the next phase.";
+  return "When this stage reports this result, work moves to the selected stage.";
 }
 function PhaseInspector(
   props: PluginSurfaceProps & {

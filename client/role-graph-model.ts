@@ -1,3 +1,4 @@
+import { kitchenStations, stageForRole } from "./kitchen-stations.js";
 import type { RoleWorkflow } from "../shared/role-builder.js";
 import type { WorkflowDefinition } from "../shared/workflow-contracts.js";
 
@@ -32,7 +33,8 @@ export interface GraphPoint {
   x: number;
   y: number;
 }
-export const graphNodeSize = { width: 220, height: 118 };
+export const graphPortSize = 64;
+export const graphNodeSize = { width: 220, height: 150 };
 export interface GraphBounds extends GraphPoint {
   width: number;
   height: number;
@@ -41,6 +43,8 @@ export interface GraphNode extends GraphPoint {
   id: string;
   primary: boolean;
   phase: GraphPhase;
+  height: number;
+  outputs: GraphConnection[];
 }
 export interface GraphRoute {
   edge: GraphConnection;
@@ -106,6 +110,54 @@ export function graphZoomTranslation(
 export function graphPanOrigin(position: GraphPoint, gestureDelta: GraphPoint): GraphPoint {
   return { x: position.x - gestureDelta.x, y: position.y - gestureDelta.y };
 }
+export function graphInputPoint(node: GraphNode): GraphPoint {
+  return { x: node.x, y: node.y + 48 };
+}
+export function graphOutputPoint(node: GraphNode, edge: GraphConnection): GraphPoint {
+  return {
+    x: node.x + graphNodeSize.width,
+    y:
+      node.y +
+      (graphNodeSize.height - graphPortSize / 2) +
+      Math.max(
+        0,
+        node.outputs.findIndex((value) => value.id === edge.id),
+      ) *
+        graphPortSize,
+  };
+}
+export function graphDropTarget(
+  nodes: readonly GraphNode[],
+  point: GraphPoint,
+): GraphNode | undefined {
+  return nodes.toReversed().find((node) => {
+    const input = graphInputPoint(node);
+    const onInput =
+      Math.abs(point.x - input.x) <= graphPortSize / 2 &&
+      Math.abs(point.y - input.y) <= graphPortSize / 2;
+    const onCard =
+      point.x >= node.x &&
+      point.x <= node.x + graphNodeSize.width &&
+      point.y >= node.y &&
+      point.y <= node.y + node.height;
+    return onInput || onCard;
+  });
+}
+export function graphOutcomeTitle(edge: GraphConnection): string {
+  if (edge.kind === "children") return "Tasks verified";
+  if (edge.kind === "skip") return "No matching changes";
+  const labels: Record<string, string> = {
+    done: "Done",
+    complete: "Done",
+    changes: "Changes requested",
+    approve: "Approved",
+    approved: "Approved",
+    pass: "Pass",
+    fail: "Fail",
+    planned: "Planned",
+  };
+  return labels[edge.label] || edge.label;
+}
 export function layoutRoleGraph(
   workflow: RoleWorkflow,
   boardId: string,
@@ -132,23 +184,19 @@ export function layoutRoleGraph(
       queue.push(edge.to);
     }
   }
-  const primary = queue.filter((id) => {
-    const phase = board.phases[id];
-    return (
-      id === board.initialPhase ||
-      phase.role ||
-      phase.next ||
-      phase.completeWithChildren ||
-      (phase.kind === "terminal" &&
-        edges.some(
-          (edge) =>
-            edge.to === id && !["cancel", "canceled", "error", "blocked"].includes(edge.label),
-        ))
-    );
-  });
+  const ordered = [...queue, ...Object.keys(board.phases).filter((id) => !depths.has(id))];
+  const roles = ordered.filter((id) => board.phases[id].role);
+  const primary = roles.length ? roles : [board.initialPhase];
   const remaining = Object.keys(board.phases).filter((id) => !primary.includes(id));
+  const heightFor = (id: string) =>
+    graphNodeSize.height +
+    Math.max(0, edges.filter((edge) => edge.from === id).length - 1) * graphPortSize;
+  const rowStep = Math.max(230, ...primary.map((id) => heightFor(id) + 90));
   const primaryRows = Math.ceil(primary.length / 3);
-  const primaryBottom = 80 + Math.max(0, primaryRows - 1) * 230 + graphNodeSize.height;
+  const primaryBottom =
+    80 +
+    Math.max(0, primaryRows - 1) * rowStep +
+    Math.max(graphNodeSize.height, ...primary.map(heightFor));
   const returns = edges.filter(
     (edge) =>
       depths.has(edge.from) &&
@@ -164,16 +212,15 @@ export function layoutRoleGraph(
     return {
       id,
       phase,
+      height: heightFor(id),
+      outputs: edges.filter((edge) => edge.from === id),
       primary: active,
       x: positions[id]?.x ?? 40 + column * 300,
-      y: positions[id]?.y ?? (active ? 80 : statesY + 36) + row * 230,
+      y: positions[id]?.y ?? (active ? 80 : statesY + 36) + row * rowStep,
     };
   });
   const primaryNodes = nodes.filter((node) => node.primary);
-  const routeBottom = Math.max(
-    primaryBottom,
-    ...primaryNodes.map((node) => node.y + graphNodeSize.height),
-  );
+  const routeBottom = Math.max(primaryBottom, ...primaryNodes.map((node) => node.y + node.height));
   let returnIndex = 0;
   const routes = edges.flatMap((edge): GraphRoute[] => {
     const from = nodes.find((node) => node.id === edge.from),
@@ -182,21 +229,17 @@ export function layoutRoleGraph(
     const returning = returns.some((value) => value.id === edge.id);
     let points: GraphPoint[];
     let label: GraphPoint;
-    if (returning) {
-      const lane = routeBottom + 56 + returnIndex * 56;
-      const gap = 18 + (returnIndex++ % 3) * 6;
-      const fromSide = from.x >= to.x ? -1 : 1;
-      const toSide = from.x === to.x ? fromSide : -fromSide;
-      const start = {
-        x: from.x + (fromSide > 0 ? graphNodeSize.width : 0),
-        y: from.y + graphNodeSize.height / 2,
-      };
-      const end = {
-        x: to.x + (toSide > 0 ? graphNodeSize.width : 0),
-        y: to.y + graphNodeSize.height / 2,
-      };
-      const startX = Math.max(8, start.x + fromSide * gap);
-      const endX = Math.max(8, end.x + toSide * gap);
+    const start = graphOutputPoint(from, edge);
+    const end = graphInputPoint(to);
+    if (returning || to.x <= from.x) {
+      let lane = Math.max(from.y + from.height, to.y + to.height) + 40;
+      let gap = 18;
+      if (returning) {
+        lane = routeBottom + 56 + returnIndex * 56;
+        gap += (returnIndex++ % 3) * 6;
+      }
+      const startX = start.x + gap;
+      const endX = Math.max(8, end.x - gap);
       points = [
         start,
         { x: startX, y: start.y },
@@ -206,24 +249,10 @@ export function layoutRoleGraph(
         end,
       ];
       label = { x: (startX + endX) / 2, y: lane };
-    } else if (from.y === to.y) {
-      const direction = to.x > from.x ? 1 : -1;
-      const start = {
-        x: from.x + (direction > 0 ? graphNodeSize.width : 0),
-        y: from.y + graphNodeSize.height / 2,
-      };
-      const end = {
-        x: to.x + (direction > 0 ? 0 : graphNodeSize.width),
-        y: to.y + graphNodeSize.height / 2,
-      };
-      points = [start, end];
-      label = { x: (start.x + end.x) / 2, y: from.y - 24 };
     } else {
-      const start = { x: from.x + graphNodeSize.width / 2, y: from.y + graphNodeSize.height };
-      const end = { x: to.x + graphNodeSize.width / 2, y: to.y };
-      const elbow = (start.y + end.y) / 2;
-      points = [start, { x: start.x, y: elbow }, { x: end.x, y: elbow }, end];
-      label = { x: (start.x + end.x) / 2 + (start.x === end.x ? 100 : 0), y: elbow };
+      const elbow = (start.x + end.x) / 2;
+      points = [start, { x: elbow, y: start.y }, { x: elbow, y: end.y }, end];
+      label = { x: elbow, y: Math.min(from.y, to.y) - 24 };
     }
     return [{ edge, points, label, returning }];
   });
@@ -256,7 +285,7 @@ export function layoutRoleGraph(
     ),
     height: Math.max(
       320,
-      ...nodes.map((node) => node.y + graphNodeSize.height + 50),
+      ...nodes.map((node) => node.y + node.height + 50),
       ...routes.flatMap((route) => route.points.map((point) => point.y + 50)),
     ),
     focus: {
@@ -272,7 +301,7 @@ export function layoutRoleGraph(
       height:
         Math.max(
           240,
-          ...primaryNodes.map((node) => node.y + graphNodeSize.height + 40),
+          ...primaryNodes.map((node) => node.y + node.height + 40),
           ...primaryRoutePoints.map((point) => point.y + 20),
           ...primaryRoutes.map((route) => route.label.y + 40),
         ) - top,
@@ -310,4 +339,92 @@ export function updateGraphConnection(
       },
     },
   };
+}
+
+export function editableItemConnections(definition: WorkflowDefinition): GraphConnection[] {
+  return graphConnections({ ...definition, maxParallel: 4 }).filter((edge) => {
+    const phase = definition.boards[edge.board].phases[edge.from];
+    return (
+      edge.board === "item" &&
+      phase.kind === "working" &&
+      edge.from !== "verify" &&
+      phase.role !== "verifier" &&
+      (edge.kind === "outcome" || edge.kind === "next")
+    );
+  });
+}
+
+export function insertWorkflowRole(
+  definition: WorkflowDefinition,
+  edge: GraphConnection,
+  input: {
+    title: string;
+    instructions: string;
+    canEdit: boolean;
+    clarification: "human" | "head-chef";
+    investigation: "human" | "request-work";
+  },
+): WorkflowDefinition {
+  const connection = editableItemConnections(definition).find((value) => value.id === edge.id);
+  if (!connection || connection.to !== edge.to)
+    throw new Error("Choose a current editable connection in Each feature.");
+  const title = input.title.trim();
+  const instructions = input.instructions.trim();
+  if (!title || title.length > 160) throw new Error("Role name needs 1 to 160 characters.");
+  if (!instructions || instructions.length > 16000)
+    throw new Error("Responsibility needs 1 to 16000 characters.");
+  const slug =
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "role";
+  const base = `custom-${slug}`.slice(0, 58).replace(/-$/g, "");
+  let id = base;
+  let suffix = 2;
+  while (definition.roles[id] || definition.boards.item.phases[id]) id = `${base}-${suffix++}`;
+  const value: WorkflowDefinition = {
+    ...definition,
+    roles: {
+      ...definition.roles,
+      [id]: {
+        id,
+        title,
+        instructions,
+        skills: [],
+        canEdit: input.canEdit,
+        workspace: input.canEdit ? "own-worktree" : "item-worktree",
+        tools: input.investigation === "request-work" ? ["item_request_work"] : [],
+        communication: {
+          clarification: input.clarification,
+          investigation: input.investigation,
+        },
+      },
+    },
+    boards: {
+      ...definition.boards,
+      item: {
+        ...definition.boards.item,
+        phases: {
+          ...definition.boards.item.phases,
+          [id]: { title, kind: "working", role: id, outcomes: { done: edge.to } },
+        },
+      },
+    },
+  };
+  const changed = updateGraphConnection(
+    { ...value, maxParallel: 4 },
+    edge,
+    id,
+    definition.boards.item.phases[edge.from].maxReturns,
+  );
+  return { ...value, boards: changed.boards };
+}
+
+export function graphPhaseTitle(workflow: RoleWorkflow, board: string, id: string): string {
+  const phase = workflow.boards[board].phases[id];
+  if (!phase.role) return phase.title;
+  const stage = stageForRole(phase.role, id, board === "root");
+  return stage === "head"
+    ? phase.title
+    : kitchenStations.find((entry) => entry.id === stage)!.title;
 }

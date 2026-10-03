@@ -3,6 +3,7 @@ import { connectLegacyClient } from "./server/legacy-client.js";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { isAbsolute } from "node:path";
 import { factorySettings } from "./shared/preferences.js";
+import { factoryWorkflowValidate } from "./shared/workflow-contracts.js";
 import { registerDashboard } from "./server/dashboard/register.js";
 import { registerFactory } from "./server/register.js";
 import { registerMigration } from "./server/migration.js";
@@ -15,10 +16,12 @@ import {
 import { loadKitchenRuntimeConfig, readOperatorCredential } from "./server/runtime-config.js";
 import { registerKitchenSuggestions } from "./server/kitchen-suggestion.js";
 import { registerNativeEntry } from "./server/native-entry.js";
+import { registerSkills } from "./server/skills.js";
 
 export default function contribute(server: PluginServerContext) {
   const host = server as PluginServerContext & { paseo?: PaseoApi; dataDirectory?: string };
   const settings = server.registerSettings(factorySettings);
+  registerSkills(server);
   const storageDirectory = async () => {
     const state = await settings.read();
     if (state.status !== "ready") throw new Error(state.error);
@@ -85,6 +88,9 @@ export default function contribute(server: PluginServerContext) {
       return directory || undefined;
     },
   });
+  server.handle(factoryWorkflowValidate, async (input, { paseo }) =>
+    (await factory.getService(paseo)).workflows.validate(input.definition),
+  );
   registerMigration(server, {
     home: async () => {
       const state = await settings.read();

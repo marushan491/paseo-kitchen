@@ -14,12 +14,14 @@ import {
 } from "../shared/factory-contracts.js";
 import { Action, Field, Disclosure, SurfaceSheet, useFactoryStyles } from "./ui.js";
 import { RuntimeProfile } from "./runtime-profile.js";
+import { SkillPicker } from "./skill-picker.js";
 import { Choice } from "./choice.js";
 import { RoleBriefFields } from "./role-editor-fields.js";
 import { WorkflowBuilder } from "./workflow-builder.js";
 import { roleTemplate, type RoleWorkflow } from "../shared/role-builder.js";
 import { resolveWorkflowSteps } from "./workflow-steps.js";
 
+const emptySkills: string[] = [];
 const emptyProfile: RoleProfileOverride = {};
 const emptyRoles: Record<string, { title: string }> = {};
 const roleGuides: Record<string, { purpose: string; instructions: string }> = {
@@ -63,6 +65,7 @@ function useProfiles() {
 export function RoleAssignments(
   props: PluginSurfaceProps & {
     roles: Record<string, { id?: string; title: string }>;
+    projectPath?: string;
     value: Record<string, RoleProfileOverride>;
     onChange(value: Record<string, RoleProfileOverride>): void;
   },
@@ -97,6 +100,7 @@ function RoleChoice(
   props: PluginSurfaceProps & {
     role: string;
     title: string;
+    projectPath?: string;
     options: { id: string; title: string; targetRole?: string }[];
     value: Record<string, RoleProfileOverride>;
     onChange(value: Record<string, RoleProfileOverride>): void;
@@ -120,17 +124,8 @@ function RoleChoice(
     [value, role, profile, onChange],
   );
   const skills = useCallback(
-    (text: string) =>
-      onChange({
-        ...value,
-        [role]: {
-          ...profile,
-          skills: text
-            .split("\n")
-            .map((entry) => entry.trim())
-            .filter(Boolean),
-        },
-      }),
+    (selectedSkills: string[]) =>
+      onChange({ ...value, [role]: { ...profile, skills: selectedSkills } }),
     [value, role, profile, onChange],
   );
   return (
@@ -160,18 +155,16 @@ function RoleChoice(
         multiline
         placeholder="Anything this role should do differently?"
       />
-      <Field
-        theme={props.theme}
-        label={`${props.title} · installed skills, one per line`}
-        value={profile.skills?.join("\n") || ""}
+      <SkillPicker
+        {...props}
+        value={profile.skills || emptySkills}
         onChange={skills}
-        multiline
-        placeholder="design-taste-frontend"
+        cwd={props.projectPath}
+        provider={profile.provider}
+        role={role}
+        title={props.title}
+        instructions={profile.instructions}
       />
-      <Text style={styles.muted}>
-        Names refer to skills available in the agent harness. Missing skills must be reported by the
-        agent.
-      </Text>
     </Disclosure>
   );
 }
@@ -409,17 +402,9 @@ function WorkflowEditor(
     [initialStepText],
   );
   const skillsChanged = useCallback(
-    (text: string) =>
-      setProfile((current) => ({
-        ...current,
-        skills: text
-          .split("\n")
-          .map((entry) => entry.trim())
-          .filter(Boolean),
-      })),
+    (skills: string[]) => setProfile((current) => ({ ...current, skills })),
     [],
   );
-  const skillText = profile.skills?.join("\n") || "";
   const runtimeSummary = profile.provider
     ? `Override: ${profile.provider}`
     : "Inherit mission provider and project defaults";
@@ -535,13 +520,14 @@ function WorkflowEditor(
             one step per nonempty line. Leave it unchanged to preserve the original steps.
           </Text>
         ) : null}
-        <Field
-          theme={props.theme}
-          label="Installed skills · one per line"
-          value={skillText}
+        <SkillPicker
+          {...props}
+          value={profile.skills || emptySkills}
           onChange={skillsChanged}
-          multiline
-          placeholder="Names of skills available to this role's harness"
+          cwd={cwd}
+          provider={profile.provider}
+          role={targetRole}
+          instructions={profile.instructions}
         />
       </Disclosure>
       <Disclosure
@@ -583,7 +569,7 @@ export function WorkItemProfileSettings(
   const [role, setRole] = useState(props.initialRole || Object.keys(props.roles)[0] || "");
   const [workflow, setWorkflow] = useState("");
   const [instructions, setInstructions] = useState("");
-  const [skills, setSkills] = useState("");
+  const [skills, setSkills] = useState<string[]>([]);
   const profiles = useProfiles();
   const configure = useRpc(factoryWorkConfigure);
   const cache = useQueryClient();
@@ -596,10 +582,7 @@ export function WorkItemProfileSettings(
         profile: {
           workflowProfileId: workflow || undefined,
           instructions: instructions || undefined,
-          skills: skills
-            .split("\n")
-            .map((entry) => entry.trim())
-            .filter(Boolean),
+          skills,
         },
         actorId: "human",
       }),
@@ -621,7 +604,7 @@ export function WorkItemProfileSettings(
       setRole(value);
       setWorkflow("");
       setInstructions("");
-      setSkills("");
+      setSkills([]);
       mutation.reset();
     },
     [mutation],
@@ -680,12 +663,14 @@ export function WorkItemProfileSettings(
         onChange={setInstructions}
         multiline
       />
-      <Field
-        theme={props.theme}
-        label="Installed role skills · one per line"
+      <SkillPicker
+        {...props}
         value={skills}
         onChange={setSkills}
-        multiline
+        cwd={props.state.team.cwd}
+        provider={item.roleProfiles?.[role]?.provider}
+        role={role}
+        instructions={instructions}
       />
       <Text style={styles.muted}>
         Applies when Kitchen starts a new agent for this role. The current agent keeps its executing

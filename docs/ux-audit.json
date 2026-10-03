@@ -1,0 +1,404 @@
+{
+  "date": "2026-10-03",
+  "tool": "axe-core",
+  "toolVersion": "4.13.0",
+  "environment": "Actual owned Mac Electron window, isolated PandaOS host, desktop 1500x1050 and compact 430x950",
+  "scope": "Studio pages and expanded settings/editor states; mission execution was not repeated",
+  "inferenceCalls": 0,
+  "agentStarts": 0,
+  "snapshots": [
+    {
+      "view": "add-role",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 22,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 3
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "clarification",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 18,
+      "manualReview": [],
+      "pageOverflow": false
+    },
+    {
+      "view": "compact-add-role",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 22,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 4
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "compact-graph",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 25,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 42
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "compact-json",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 24,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 26
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "compact-kitchen",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 20,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 36
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "compact-missions",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 20,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 23
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "compact-overview",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 20,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 26
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "compact-role",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 23,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 2
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "compact-settings",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 24,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 23
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "compact-skills",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 22,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 1
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "compact-team",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 20,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 27
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "connection",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 22,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 1
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "dashboard-advanced",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 24,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 29
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "dashboard",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 19,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 26
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "feature",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 20,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 51
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "improvement-rule",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 23,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 24
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "improvements",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 19,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 19
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "investigation",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 18,
+      "manualReview": [],
+      "pageOverflow": false
+    },
+    {
+      "view": "json",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 24,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 29
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "kitchen",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 21,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 26
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "migration",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 23,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 20
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "missions",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 19,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 23
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "overview",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 19,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 26
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "role",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 22,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 2
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "role-preset",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 23,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 3
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "settings-advanced",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 24,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 30
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "settings",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 23,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 25
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "skills",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 22,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 2
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "team",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 20,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 48
+        }
+      ],
+      "pageOverflow": false
+    },
+    {
+      "view": "team-rules",
+      "axeVersion": "4.13.0",
+      "violations": 0,
+      "passedRules": 24,
+      "manualReview": [
+        {
+          "rule": "color-contrast",
+          "nodes": 42
+        }
+      ],
+      "pageOverflow": false
+    }
+  ]
+}

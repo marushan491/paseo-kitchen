@@ -584,6 +584,7 @@ Expired sessions return to sign-in"
         >
           <RoleAssignments
             {...props}
+            projectPath={cwd}
             roles={selectedPack?.roles || selectedPack?.workflow.roles || emptyRoles}
             value={props.roleProfiles}
             onChange={props.onRoleProfiles}

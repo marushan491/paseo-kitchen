@@ -1,4 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+} from "react";
 import { Animated, PanResponder, Platform, View, type LayoutChangeEvent } from "react-native";
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import {
@@ -30,6 +40,9 @@ interface GraphElement {
   ): void;
   removeEventListener(name: string, listener: (event: GraphInput) => void): void;
 }
+export interface GraphViewportHandle {
+  toGraphPoint(point: { x: number; y: number }): { x: number; y: number };
+}
 export function GraphViewport(
   props: PluginSurfaceProps & {
     width: number;
@@ -40,10 +53,12 @@ export function GraphViewport(
     focus: GraphBounds;
     onZoom(value: number): void;
     onScale?(value: number): void;
+    onFit?(): void;
+    controllerRef?: Ref<GraphViewportHandle>;
     children: ReactNode;
   },
 ) {
-  const [bounds, setBounds] = useState({ width: 640, height: 480 });
+  const [bounds, setBounds] = useState({ width: 0, height: 0 });
   const viewport = useRef<View>(null);
   const translation = useRef(new Animated.ValueXY()).current;
   const scale = useRef(new Animated.Value(1)).current;
@@ -62,7 +77,42 @@ export function GraphViewport(
   });
   const lastView = useRef("");
   const lastFit = useRef(props.fitKey);
-  const { onZoom, onScale } = props;
+  const canvasSize = useRef({ width: props.width, height: props.height });
+  const { onZoom, onScale, onFit } = props;
+  useImperativeHandle(
+    props.controllerRef,
+    () => ({
+      toGraphPoint: (point) => {
+        const value = gesture.current;
+        let left = value.left;
+        let top = value.top;
+        if (Platform.OS === "web") {
+          const rect = (
+            viewport.current as unknown as GraphElement | null
+          )?.getBoundingClientRect();
+          if (rect) {
+            left = rect.left;
+            top = rect.top;
+          }
+        }
+        return {
+          x: (point.x - left - bounds.width / 2 - value.x) / (value.zoom / 100) + props.width / 2,
+          y: (point.y - top - bounds.height / 2 - value.y) / (value.zoom / 100) + props.height / 2,
+        };
+      },
+    }),
+    [bounds, props.width, props.height],
+  );
+  useLayoutEffect(() => {
+    const previous = canvasSize.current;
+    if (lastView.current === props.viewKey) {
+      const value = gesture.current;
+      value.x += ((props.width - previous.width) * value.zoom) / 200;
+      value.y += ((props.height - previous.height) * value.zoom) / 200;
+      translation.setValue({ x: value.x, y: value.y });
+    }
+    canvasSize.current = { width: props.width, height: props.height };
+  }, [props.width, props.height, props.viewKey, translation]);
   const zoomAt = useCallback(
     (zoom: number, x: number, y: number) => {
       const value = gesture.current;
@@ -98,7 +148,8 @@ export function GraphViewport(
     [props.width, props.height, props.focus, bounds, translation, scale, onZoom],
   );
   useEffect(() => {
-    const key = `${props.viewKey}:${bounds.width}:${bounds.height}`;
+    if (!bounds.width || !bounds.height) return;
+    const key = props.viewKey;
     const requested = lastFit.current !== props.fitKey;
     if (!requested && lastView.current === key) return;
     lastView.current = key;
@@ -158,7 +209,8 @@ export function GraphViewport(
         zoomAt(zoom, bounds.width / 2, bounds.height / 2);
       } else if (event.key.toLowerCase() === "f") {
         event.preventDefault();
-        frame(true);
+        if (onFit) onFit();
+        else frame(true);
       } else if (event.key.startsWith("Arrow")) {
         event.preventDefault();
         const step = event.shiftKey ? 100 : 40;
@@ -175,7 +227,7 @@ export function GraphViewport(
       element.removeEventListener("wheel", wheel);
       element.removeEventListener("keydown", keydown);
     };
-  }, [bounds, frame, translation, zoomAt]);
+  }, [bounds, frame, onFit, translation, zoomAt]);
   const responder = useMemo(
     () =>
       PanResponder.create({
@@ -270,6 +322,7 @@ export function GraphViewport(
   return (
     <View
       ref={viewport}
+      role="group"
       accessibilityLabel="Workflow graph canvas"
       accessibilityHint="Scroll to zoom, drag to pan. Use plus, minus, zero, F or arrow keys."
       focusable={Platform.OS === "web"}

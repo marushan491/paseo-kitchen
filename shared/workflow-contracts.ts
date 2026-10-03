@@ -104,6 +104,11 @@ export const factoryWorkflowSave = defineRpc({
   }),
   output: WorkflowDefinitionSchema,
 });
+export const factoryWorkflowValidate = defineRpc({
+  name: "factory.workflow.validate",
+  input: z.object({ definition: WorkflowDefinitionSchema }),
+  output: WorkflowDefinitionSchema,
+});
 export const factoryWorkflowPreview = defineRpc({
   name: "factory.workflow.preview",
   input: z.object({

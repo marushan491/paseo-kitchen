@@ -69,38 +69,6 @@
       "evidenceRef": "evidence://wks_51314d22476ca196/evr_71bd1e68-d5ff-4fcf-a7c8-40e2fef9e572/screenshot"
     },
     {
-      "file": "roles-workflows.png",
-      "dimensions": [1628, 1170],
-      "sha256": "2fdd103687e4c83c03adcf1146db234292698503b73952768d0f21b28538b0d5",
-      "capturedAt": "2026-10-03",
-      "captureMethod": "Actual Mac Electron CDP capture from an owned test window; private sidebar excluded",
-      "inferenceCalls": 0
-    },
-    {
-      "file": "workflow-task.png",
-      "dimensions": [1628, 1170],
-      "sha256": "da18794085abde652951bd96ef70983d20c31045919914dcf62d7622a75d1450",
-      "capturedAt": "2026-10-03",
-      "captureMethod": "Actual Mac Electron CDP capture from an owned test window; private sidebar excluded",
-      "inferenceCalls": 0
-    },
-    {
-      "file": "role-editor.png",
-      "dimensions": [1628, 1170],
-      "sha256": "0ee12e4388b454c609265538eba8e320afe3e0aa15299a979beb9f2942dbc1e8",
-      "capturedAt": "2026-10-03",
-      "captureMethod": "Actual Mac Electron CDP capture from an owned test window; private sidebar excluded",
-      "inferenceCalls": 0
-    },
-    {
-      "file": "workflow-connection.png",
-      "dimensions": [1628, 1170],
-      "sha256": "68b7eec9cf1f587b650f2483bc9d87361fabc623b6ec24058fe18959f2ea05ff",
-      "capturedAt": "2026-10-03",
-      "captureMethod": "Actual Mac Electron CDP capture from an owned test window; private sidebar excluded",
-      "inferenceCalls": 0
-    },
-    {
       "file": "settings.png",
       "dimensions": [1440, 900],
       "sha256": "be4a1d797cfbc19e05429b5a0ea5cdff47cf3f61a1712925624d0a08502ca8f7",
@@ -159,11 +127,75 @@
       "captureStatus": "Fresh Root capture after final live QA; copied from the retained original."
     },
     {
+      "file": "roles-workflows.png",
+      "dimensions": [1180, 1014],
+      "sha256": "7396cd2bb925fa29d6924671d96c6e8f22f86116e64595cd06cfba269ea7d049",
+      "capturedAt": "2026-10-03T09:35:57.473426+00:00",
+      "captureMethod": "Actual owned Mac Electron window via CDP; Studio or dialog bounds captured directly; isolated QA host; no image generation",
+      "inferenceCalls": 0
+    },
+    {
+      "file": "workflow-task.png",
+      "dimensions": [1180, 1014],
+      "sha256": "2154a303c46ac163d82ccbdf1b96b38b8bd71fd4deb46cce561587993eee7f84",
+      "capturedAt": "2026-10-03T09:35:57.473426+00:00",
+      "captureMethod": "Actual owned Mac Electron window via CDP; Studio or dialog bounds captured directly; isolated QA host; no image generation",
+      "inferenceCalls": 0
+    },
+    {
+      "file": "role-editor.png",
+      "dimensions": [640, 1050],
+      "sha256": "168289aee0d071efbaef2efe02e8823b426e07cd2be060538084949af5fab380",
+      "capturedAt": "2026-10-03T09:35:57.473426+00:00",
+      "captureMethod": "Actual owned Mac Electron window via CDP; Studio or dialog bounds captured directly; isolated QA host; no image generation",
+      "inferenceCalls": 0
+    },
+    {
+      "file": "workflow-connection.png",
+      "dimensions": [640, 1050],
+      "sha256": "f35111988c89191aa21227cc7ca83ad914da70063a08151f71aa4414a642aab0",
+      "capturedAt": "2026-10-03T09:35:57.473426+00:00",
+      "captureMethod": "Actual owned Mac Electron window via CDP; Studio or dialog bounds captured directly; isolated QA host; no image generation",
+      "inferenceCalls": 0
+    },
+    {
       "file": "compact-team-role.png",
-      "dimensions": [430, 914],
-      "sha256": "b1f6f57a91c2d7a74357e0ec576be3f8e8234127ca7b158304c54049a7da1142",
-      "capturedAt": "2026-10-03",
-      "captureMethod": "Actual Mac Electron CDP capture from an owned test window; private sidebar excluded",
+      "dimensions": [430, 855],
+      "sha256": "2a6b31440bb3f4652f9887ee4f6ed5e6420ed469360f58dc96d1dcfd60e9dd56",
+      "capturedAt": "2026-10-03T09:35:57.473426+00:00",
+      "captureMethod": "Actual owned Mac Electron window via CDP; Studio or dialog bounds captured directly; isolated QA host; no image generation",
+      "inferenceCalls": 0
+    },
+    {
+      "file": "skills.png",
+      "dimensions": [440, 542],
+      "sha256": "7229831b65fc44ce74efe852f806cc3e1cdb65a8e34afafb1ddb02823c626bc3",
+      "capturedAt": "2026-10-03T09:35:57.473426+00:00",
+      "captureMethod": "Actual owned Mac Electron window via CDP; Studio or dialog bounds captured directly; isolated QA host; no image generation",
+      "inferenceCalls": 0
+    },
+    {
+      "file": "workflow-json.png",
+      "dimensions": [1180, 1014],
+      "sha256": "d0ba883cd1527013e6c835a52e01c44a8f6902d54e9228eebadc8b8575eb7681",
+      "capturedAt": "2026-10-03T09:35:57.473426+00:00",
+      "captureMethod": "Actual owned Mac Electron window via CDP; Studio or dialog bounds captured directly; isolated QA host; no image generation",
+      "inferenceCalls": 0
+    },
+    {
+      "file": "workflow-add-role.png",
+      "dimensions": [640, 807],
+      "sha256": "7bf5ea74e3f38f8629ec09a93ef1bb960ca24a2f90b2e74dda5bb6d503c1ced1",
+      "capturedAt": "2026-10-03T09:35:57.473426+00:00",
+      "captureMethod": "Actual owned Mac Electron window via CDP; Studio or dialog bounds captured directly; isolated QA host; no image generation",
+      "inferenceCalls": 0
+    },
+    {
+      "file": "compact-skills.png",
+      "dimensions": [430, 554],
+      "sha256": "247d9b33695778df24eebbb0b3076bd3fb2208e345e75f2c3e03cc68178d94e7",
+      "capturedAt": "2026-10-03T09:35:57.473426+00:00",
+      "captureMethod": "Actual owned Mac Electron window via CDP; Studio or dialog bounds captured directly; isolated QA host; no image generation",
       "inferenceCalls": 0
     }
   ],

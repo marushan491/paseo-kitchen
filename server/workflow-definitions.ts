@@ -69,6 +69,8 @@ export function validateDefinition(
 }
 
 function validateRoles(value: WorkflowDefinition) {
+  if (value.roles.developer?.workspace !== "own-worktree")
+    throw new Error("Build must create an isolated worktree for the feature");
   for (const id of Object.keys(value.roleProfiles ?? {}))
     if (!value.roles[id]) throw new Error("Model preference needs a known workflow role");
   for (const [id, role] of Object.entries(value.roles)) {
@@ -101,13 +103,15 @@ function validateCompletion(value: WorkflowDefinition, base: WorkflowPack) {
     throw new Error("Editable review cannot be removed");
   let completed = false;
   const visited = new Set<string>();
-  const walk = (phaseId: string, review: boolean, verify: boolean) => {
+  const walk = (phaseId: string, review: boolean, verify: boolean, developer: boolean) => {
     const phase = board.phases[phaseId];
     if (!phase) throw new Error("Unknown workflow phase");
+    validateFeatureWorkspace(value, phase.role, developer);
+    developer ||= phase.role === "developer";
     if (phase.role && value.roles[phase.role]?.canEdit) verify = false;
     review ||= phase.role === "reviewer";
     verify ||= phase.role === "verifier";
-    const key = `${phaseId}:${review}:${verify}`;
+    const key = `${phaseId}:${review}:${verify}:${developer}`;
     if (visited.has(key)) return;
     visited.add(key);
     if (phase.kind === "terminal" && phaseId !== "canceled") completed = true;
@@ -119,10 +123,19 @@ function validateCompletion(value: WorkflowDefinition, base: WorkflowPack) {
       phase.completeWithChildren,
       phase.skipTo,
     ])
-      if (target) walk(target, review, verify);
+      if (target) walk(target, review, verify, developer);
   };
-  walk(board.initialPhase, false, false);
+  walk(board.initialPhase, false, false, false);
   if (!completed) throw new Error("Workflow has no reachable verified completion");
+}
+
+function validateFeatureWorkspace(
+  value: WorkflowDefinition,
+  role: string | undefined,
+  developer: boolean,
+) {
+  if (!developer && value.roles[role ?? ""]?.workspace === "item-worktree")
+    throw new Error("Roles using the feature worktree must run after Build has created it");
 }
 
 function validateCondition(
@@ -204,6 +217,11 @@ export class WorkflowDefinitions {
   ) {}
   private path() {
     return join(this.root, "workflow-definitions.json");
+  }
+  validate(input: WorkflowDefinition): WorkflowDefinition {
+    const base = this.packs.get(input.basePackId);
+    if (!base) throw new Error("Workflow base pack not found");
+    return validateDefinition(input, base);
   }
   async list(): Promise<WorkflowDefinition[]> {
     try {
