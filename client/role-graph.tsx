@@ -26,6 +26,24 @@ export interface RoleGraphProps extends PluginSurfaceProps {
 }
 export function RoleGraph(props: RoleGraphProps) {
   const styles = useFactoryStyles(props);
+  const toolbarStyles = useMemo(
+    () => ({
+      toolbar: {
+        ...styles.row,
+        alignItems: "flex-end" as const,
+        justifyContent: "space-between" as const,
+        gap: 12,
+      },
+      board: { width: props.layout.compact ? ("100%" as const) : 280 },
+      controls: { ...styles.row, gap: 6 },
+      zoom: {
+        ...styles.text,
+        minWidth: 42,
+        textAlign: "center" as const,
+      },
+    }),
+    [styles.row, styles.text, props.layout.compact],
+  );
   const boards = useMemo(() => Object.keys(props.workflow.boards), [props.workflow.boards]);
   const [boardId, setBoard] = useState(boards[0] ?? "root");
   const [mode, setMode] = useState(props.layout.compact ? "list" : "graph");
@@ -87,56 +105,54 @@ export function RoleGraph(props: RoleGraphProps) {
   const options = useMemo(() => boards.map((id) => ({ id, title: boardTitle(id) })), [boards]);
   return (
     <View style={styles.stack}>
-      <View style={styles.header}>
-        <View style={styles.roleInfo}>
-          <Text style={styles.heading}>Workflow</Text>
-          <Text style={styles.muted}>
-            Follow the real outcomes and returns. Select a role or connection to inspect it.
-          </Text>
+      <View style={toolbarStyles.toolbar}>
+        <View style={toolbarStyles.board}>
+          <Choice
+            {...props}
+            label="Work board"
+            value={board}
+            options={options}
+            onChange={chooseBoard}
+          />
         </View>
-      </View>
-      <Choice
-        {...props}
-        label="Work board"
-        value={board}
-        options={options}
-        onChange={chooseBoard}
-      />
-      <View style={styles.row}>
-        <Action
-          theme={props.theme}
-          title="List"
-          value="list"
-          selected={mode === "list"}
-          onAction={chooseMode}
-        />
-        <Action
-          theme={props.theme}
-          title="Graph"
-          value="graph"
-          selected={mode === "graph"}
-          onAction={chooseMode}
-        />
-      </View>
-      {mode === "graph" ? (
-        <>
-          <View style={styles.row}>
+        <View style={toolbarStyles.controls}>
+          <Action
+            theme={props.theme}
+            title="List"
+            value="list"
+            selected={mode === "list"}
+            onAction={chooseMode}
+            compact={props.layout.compact}
+          />
+          <Action
+            theme={props.theme}
+            title="Graph"
+            value="graph"
+            selected={mode === "graph"}
+            onAction={chooseMode}
+            compact={props.layout.compact}
+          />
+        </View>
+        {mode === "graph" ? (
+          <View style={toolbarStyles.controls}>
             <Action
               theme={props.theme}
-              title="Zoom out"
+              title="−"
               accessibilityLabel="Graph zoom out"
               value={-10}
               onAction={changeZoom}
               disabled={zoom <= 60}
+              compact={props.layout.compact}
             />
-            <Text style={styles.text}>{zoom}%</Text>
+            <Text style={toolbarStyles.zoom}>{zoom}%</Text>
             <Action
               theme={props.theme}
-              title="Zoom in"
+              title="+"
               accessibilityLabel="Graph zoom in"
               value={10}
               onAction={changeZoom}
               disabled={zoom >= 180}
+              compact={props.layout.compact}
             />
             <Action
               theme={props.theme}
@@ -144,9 +160,20 @@ export function RoleGraph(props: RoleGraphProps) {
               accessibilityLabel="Fit workflow graph"
               value="fit"
               onAction={fit}
+              compact={props.layout.compact}
             />
-            <Action theme={props.theme} title="Auto-arrange" value="arrange" onAction={arrange} />
+            <Action
+              theme={props.theme}
+              title="Auto-arrange"
+              value="arrange"
+              onAction={arrange}
+              compact={props.layout.compact}
+            />
           </View>
+        ) : null}
+      </View>
+      {mode === "graph" ? (
+        <>
           <GraphViewport
             {...props}
             width={graph.width}
@@ -206,8 +233,8 @@ export function RoleGraph(props: RoleGraphProps) {
   );
 }
 function boardTitle(id: string) {
-  if (id === "root") return "Mission · plan and integration";
-  if (id === "item") return "Scoped task · implementation and verification";
+  if (id === "root") return "Mission plan and integration";
+  if (id === "item") return "Task build and verification";
   return id;
 }
 function PhaseNode(

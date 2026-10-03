@@ -59,6 +59,19 @@ function variantOf(definition: WorkflowDefinition): WorkflowDefinition {
 
 export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: string }) {
   const styles = useFactoryStyles(props);
+  const editorStyles = useMemo(
+    () => ({
+      header: {
+        ...styles.header,
+        flexDirection: props.layout.compact ? ("column" as const) : ("row" as const),
+        alignItems: props.layout.compact ? ("stretch" as const) : ("flex-end" as const),
+        gap: 12,
+      },
+      summary: { ...styles.roleSummary, minWidth: props.layout.compact ? 0 : 180 },
+      workflow: { width: props.layout.compact ? ("100%" as const) : 220 },
+    }),
+    [styles.header, styles.roleSummary, props.layout.compact],
+  );
   const paseo = usePaseo();
   const cache = useQueryClient();
   const list = useRpc(factoryWorkflowsList);
@@ -206,12 +219,19 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
   );
   return (
     <View style={styles.stack}>
-      <View style={styles.header}>
-        <View style={styles.roleSummary}>
+      <View style={editorStyles.header}>
+        <View style={editorStyles.summary}>
           <Text style={styles.title}>Team editor</Text>
-          <Text style={styles.muted}>
-            Describe the team you need. Follow how work passes between its roles.
-          </Text>
+          <Text style={styles.muted}>Select a role or handoff to shape how your team works.</Text>
+        </View>
+        <View style={editorStyles.workflow}>
+          <Choice
+            {...props}
+            label="Workflow"
+            value={selected}
+            options={roleOptions}
+            onChange={choose}
+          />
         </View>
         <View style={styles.row}>
           <Action
@@ -232,13 +252,6 @@ export function WorkflowBuilder(props: PluginSurfaceProps & { projectPath?: stri
           />
         </View>
       </View>
-      <Choice
-        {...props}
-        label="Workflow"
-        value={selected}
-        options={roleOptions}
-        onChange={choose}
-      />
       {error ? (
         <Text accessibilityLiveRegion="polite" style={styles.danger}>
           {String(error)}
